@@ -2,7 +2,7 @@
 FROM node:22-bookworm-slim
 
 RUN apt-get update \
- && apt-get install -y --no-install-recommends python3 ca-certificates \
+ && apt-get install -y --no-install-recommends python3 ca-certificates tzdata \
  && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /opt/meshctrl
@@ -15,9 +15,12 @@ RUN npm install --omit=dev --no-audit --no-fund meshcentral@${MESHCENTRAL_VERSIO
 WORKDIR /app
 COPY agent ./agent
 COPY worker/pcm ./worker/pcm
+COPY worker/meshpipe.js ./worker/meshpipe.js
 
 ENV PYTHONPATH=/app/worker \
     MESHCTRL_CMD="node /opt/meshctrl/node_modules/meshcentral/meshctrl.js" \
+    NODE_PATH=/opt/meshctrl/node_modules \
+    TZ=Europe/Paris \
     PCM_DB=/data/pcm.sqlite \
     PCM_MAPPING=/config/mapping.json \
     PCM_SOFTWARE=/config/logiciels.json \

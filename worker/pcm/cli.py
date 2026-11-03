@@ -152,6 +152,17 @@ def cmd_serve(args, mesh: MeshCtrl) -> int:
     script_path = os.environ.get("PCM_AGENT_SCRIPT")
     script = Path(script_path).read_text(encoding="utf-8") if script_path else None
     inv.build_command(script)
+    from . import planning as plan
+    from .meshctrl import MeshPipe
+
+    # La session permanente (lot 5) : plusieurs postes en même temps.
+    # PCM_MESHPIPE=0 revient à meshctrl, un poste à la fois.
+    if os.environ.get("PCM_MESHPIPE", "1") != "0":
+        mesh.pipe = MeshPipe()
+    schedules = {
+        "inventaire": plan.parse_slot(os.environ.get("PCM_INVENTORY_AT", "03:00")),
+        "logiciels": plan.parse_slot(os.environ.get("PCM_UPDATE_AT", "dim 04:00")),
+    }
     service = Service(
         mesh,
         avd_client(),
@@ -160,8 +171,15 @@ def cmd_serve(args, mesh: MeshCtrl) -> int:
         script=script,
         group=args.group,
         push_ip=args.push_ip,
+        concurrency=int(os.environ.get("PCM_CONCURRENCY", "4")),
+        schedules=schedules,
+        tz=plan.zone(os.environ.get("PCM_TZ")),
     )
-    return serve(service, interval=args.interval)
+    try:
+        return serve(service, interval=args.interval)
+    finally:
+        if mesh.pipe is not None:
+            mesh.pipe.close()
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -84,12 +84,15 @@ class AvdClient:
         return self._tool("set_unit_inventory", asset_tag, {"unit": asset_tag, **payload})
 
 
-    def heartbeat(self, source: str, devices: list[dict] | None, limit: int) -> list[dict]:
+    def heartbeat(self, source: str, devices: list[dict] | None, limit: int, tool: dict | None = None) -> list[dict]:
         """Battement de la page Postes : dit ce que MeshCentral voit, rend les
-        tâches en attente (passées « en cours » côté AVDiagram)."""
+        tâches en attente (passées « en cours » côté AVDiagram). `tool` (lot 5) :
+        la version du serveur MeshCentral et les heures de planification."""
         body: dict = {"source": source, "limit": limit}
         if devices is not None:
             body["devices"] = devices
+        if tool:
+            body["tool"] = tool
         return self._request("POST", "/api/v1/postes/battement", body).get("tasks") or []
 
     def software(self) -> list[dict] | None:
@@ -109,6 +112,11 @@ class AvdClient:
 
     def remove_probe(self, unit_id: str) -> bool:
         return bool(self._request("DELETE", "/api/v1/postes/sondes", {"unit_id": unit_id}).get("removed"))
+
+    def request_tasks(self, action: str, asset_tags: list[str], params: dict | None = None) -> dict:
+        """Demande une tâche par poste, comme la page Postes (lot 5, tâches
+        planifiées) : { requested, busy, unknown }."""
+        return self._request("POST", "/api/v1/postes/taches", {"action": action, "asset_tags": asset_tags, "params": params or {}})
 
     def get_envoi(self, envoi_id: str) -> dict:
         """Un script approuvé ou un fichier de la bibliothèque d'envois (0075).

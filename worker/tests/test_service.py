@@ -82,8 +82,8 @@ class FakeAvd:
     def software(self):
         return self.catalogue
 
-    def heartbeat(self, source, devices, limit):
-        self.heartbeats.append({"source": source, "devices": devices, "limit": limit})
+    def heartbeat(self, source, devices, limit, tool=None):
+        self.heartbeats.append({"source": source, "devices": devices, "limit": limit, **({"tool": tool} if tool else {})})
         taken, self.queue = self.queue[:limit], self.queue[limit:]
         return taken
 
