@@ -16,7 +16,9 @@ from dataclasses import dataclass
 
 
 class AvdError(RuntimeError):
-    pass
+    def __init__(self, message: str, status: int | None = None):
+        super().__init__(message)
+        self.status = status
 
 
 @dataclass(frozen=True)
@@ -47,7 +49,7 @@ class AvdClient:
                 return json.loads(resp.read().decode("utf-8"))
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", "replace")[:300]
-            raise AvdError(f"AVDiagram {method} {path} : HTTP {exc.code} : {detail}") from exc
+            raise AvdError(f"AVDiagram {method} {path} : HTTP {exc.code} : {detail}", exc.code) from exc
         except urllib.error.URLError as exc:
             raise AvdError(f"AVDiagram injoignable : {exc.reason}") from exc
 
@@ -80,6 +82,26 @@ class AvdClient:
     def set_inventory(self, asset_tag: str, payload: dict) -> str:
         """Appelle l'outil MCP set_unit_inventory : remplace l'inventaire détaillé de la fiche."""
         return self._tool("set_unit_inventory", asset_tag, {"unit": asset_tag, **payload})
+
+
+    def heartbeat(self, source: str, devices: list[dict] | None, limit: int) -> list[dict]:
+        """Battement de la page Postes : dit ce que MeshCentral voit, rend les
+        tâches en attente (passées « en cours » côté AVDiagram)."""
+        body: dict = {"source": source, "limit": limit}
+        if devices is not None:
+            body["devices"] = devices
+        return self._request("POST", "/api/v1/postes/battement", body).get("tasks") or []
+
+    def finish_task(self, task_id: str, ok: bool, result: str) -> bool:
+        """Rend le résultat d'une tâche. False si AVDiagram ne l'attend plus
+        (annulée, ou expirée après 30 minutes)."""
+        try:
+            self._request("POST", f"/api/v1/postes/taches/{task_id}", {"status": "done" if ok else "failed", "result": result[:4000]})
+            return True
+        except AvdError as exc:
+            if exc.status == 409:
+                return False
+            raise
 
 
 def plan_update(unit: Unit, summary: dict, push_ip: bool = False) -> tuple[dict, list[str]]:
