@@ -111,7 +111,8 @@ def cmd_software(args, mesh: MeshCtrl) -> int:
     from .service import load_software
 
     mapping = load_mapping(args.mapping)
-    packages, installers = load_software(args.profile, args.installers, args.installers_dir)
+    avd = avd_client() if os.environ.get("AVD_URL") and os.environ.get("AVD_TOKEN") else None
+    packages, installers = load_software(args.profile, args.installers, args.installers_dir, avd)
     if args.installers_only:
         packages = []
     wanted = {t.strip().upper() for t in args.only.split(",") if t.strip()}

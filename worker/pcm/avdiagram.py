@@ -92,6 +92,16 @@ class AvdClient:
             body["devices"] = devices
         return self._request("POST", "/api/v1/postes/battement", body).get("tasks") or []
 
+    def software(self) -> list[dict] | None:
+        """Le catalogue de l'onglet Postes, Logiciels (0072). None si cet
+        AVDiagram ne l'a pas encore (route absente ou migration manquante)."""
+        try:
+            return self._request("GET", "/api/v1/postes/logiciels").get("software") or []
+        except AvdError as exc:
+            if exc.status in (404, 503):
+                return None
+            raise
+
     def finish_task(self, task_id: str, ok: bool, result: str) -> bool:
         """Rend le résultat d'une tâche. False si AVDiagram ne l'attend plus
         (annulée, ou expirée après 30 minutes)."""

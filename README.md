@@ -110,6 +110,18 @@ Points connus :
 - vMix, Blackmagic ATEM Switchers et DaVinci Resolve ne sont pas dans winget :
   voir « Installeurs du NAS » ci-dessous.
 
+## Catalogue d'AVDiagram (Parc, Postes, Logiciels)
+
+Depuis AVDiagram avec la migration 0072, le profil se tient dans l'onglet
+Parc, Postes, Logiciels : identifiants winget, et installeurs .exe ou .msi
+déposés depuis la page. Dès que ce catalogue a une ligne, il remplace
+`config/logiciels.json` et `config/installeurs.json`. Chaque installeur arrive
+avec une adresse de téléchargement signée (6 heures) : le poste le télécharge
+lui-même (curl.exe, Windows 10 1803 et suivants), sans passer par le NAS. La
+taille téléchargée est comparée à celle du catalogue avant l'installation.
+`pcm software --only PN09` lit aussi ce catalogue quand `AVD_URL` et
+`AVD_TOKEN` sont posés.
+
 ## Installeurs du NAS (vMix, ATEM, DaVinci)
 
 Le même bouton installe aussi, après winget, les logiciels hors winget à partir

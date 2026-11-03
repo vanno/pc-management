@@ -31,8 +31,24 @@ SOURCE = "pc-management"
 RESULT_MAX = 4000
 
 
-def load_software(profile_path, installers_path, installers_dir):
-    """Le profil winget et les installeurs du NAS. L'un des deux peut manquer, pas les deux."""
+def load_software(profile_path, installers_path, installers_dir, avd=None):
+    """Ce que le bouton « Installer les logiciels » pose : le catalogue
+    d'AVDiagram (Postes, Logiciels) s'il a au moins une ligne, sinon le profil
+    winget et les installeurs du NAS. Côté NAS, l'un des deux peut manquer, pas
+    les deux."""
+    if avd is not None:
+        catalogue = avd.software()
+        if catalogue:
+            packages = [
+                sw.Package(str(e.get("id")), str(e.get("name") or e.get("id")))
+                for e in catalogue
+                if e.get("kind") == "winget"
+            ]
+            for p in packages:
+                if not sw.ID_RE.match(p.id):
+                    raise sw.SoftwareError(f"Identifiant winget illisible dans le catalogue : {p.id!r}")
+            installers = ins.from_catalogue([e for e in catalogue if e.get("kind") == "installer"])
+            return packages, installers
     installers = ins.load_installers(installers_path, installers_dir)
     try:
         packages = sw.load_profile(profile_path)
@@ -138,8 +154,8 @@ class Service:
     def install_profile(self, device: Device, tag: str) -> tuple[bool, str]:
         """Le profil winget puis les installeurs du NAS, un logiciel à la fois, puis un inventaire."""
         try:
-            packages, installers = load_software(self.profile_path, self.installers_path, self.installers_dir)
-        except (sw.SoftwareError, ins.InstallerError) as exc:
+            packages, installers = load_software(self.profile_path, self.installers_path, self.installers_dir, self.avd)
+        except (sw.SoftwareError, ins.InstallerError, AvdError) as exc:
             return False, _short(str(exc))
         outcomes = []
         for package in packages:
