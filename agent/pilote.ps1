@@ -12,6 +12,11 @@
         evenement        { actif, jours }
         supervision      { actif, url, jeton, script } : pose ou retire la sonde
                          (script : agent/supervision.ps1, gzip puis base64)
+        script           { empreinte, script, delai } : lance un script approuvé
+                         dans AVDiagram (gzip puis base64), refusé si son
+                         empreinte SHA-256 n'est pas celle annoncée
+        fichier          { url, nom, destination, taille } : télécharge un
+                         fichier de la bibliothèque dans un dossier du poste
 
   Sortie : une seule ligne
       PNPL1:<jeton>:<JSON encodé en base64 UTF-8>
@@ -314,6 +319,99 @@ function Remove-Sonde {
     $result.detail = 'sonde retirée'
 }
 
+# --- Envois : scripts approuvés et fichiers ------------------------------------------
+
+$dossierScripts = Join-Path $base 'scripts'
+
+function Get-Fin([string]$Texte, [int]$Max) {
+    if (-not $Texte) { return '' }
+    $t = $Texte.Trim()
+    if ($t.Length -le $Max) { return $t }
+    '…' + $t.Substring($t.Length - $Max)
+}
+
+function Invoke-Script($p) {
+    if ($p.empreinte -notmatch '^[0-9a-f]{64}$') { throw 'empreinte du script illisible' }
+    $m = New-Object IO.MemoryStream(, [Convert]::FromBase64String($p.script))
+    $g = New-Object IO.Compression.GZipStream($m, [IO.Compression.CompressionMode]::Decompress)
+    $octets = New-Object IO.MemoryStream
+    $g.CopyTo($octets)
+    $brut = $octets.ToArray()
+    $sha = [Security.Cryptography.SHA256]::Create()
+    $vue = -join ($sha.ComputeHash($brut) | ForEach-Object { $_.ToString('x2') })
+    if ($vue -ne $p.empreinte) { throw 'le script reçu ne correspond pas à son empreinte : rien n''est lancé' }
+    if (-not (Test-Path $dossierScripts)) { New-Item -ItemType Directory -Path $dossierScripts -Force | Out-Null }
+    & icacls.exe $dossierScripts /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' | Out-Null
+    $fichier = Join-Path $dossierScripts ($vue + '.ps1')
+    $sortie = Join-Path $dossierScripts ($vue + '.out.txt')
+    $erreurs = Join-Path $dossierScripts ($vue + '.err.txt')
+    # Le BOM UTF-8 : sans lui, Windows PowerShell 5.1 lit le fichier en ANSI.
+    [IO.File]::WriteAllText($fichier, [Text.Encoding]::UTF8.GetString($brut), (New-Object System.Text.UTF8Encoding $true))
+    $delai = 300
+    if ($p.delai) { $delai = [Math]::Min(1800, [Math]::Max(10, [int]$p.delai)) }
+    try {
+        $proc = Start-Process -FilePath 'powershell.exe' -ArgumentList @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', "`"$fichier`"") `
+            -RedirectStandardOutput $sortie -RedirectStandardError $erreurs -WindowStyle Hidden -PassThru
+        $fini = $proc.WaitForExit($delai * 1000)
+        if (-not $fini) {
+            & taskkill.exe /PID $proc.Id /T /F | Out-Null
+            $result.code = $null
+        } else {
+            $proc.WaitForExit()
+            $result.code = $proc.ExitCode
+        }
+        $out = ''
+        $err = ''
+        if (Test-Path $sortie) { $out = [IO.File]::ReadAllText($sortie) }
+        if (Test-Path $erreurs) { $err = [IO.File]::ReadAllText($erreurs) }
+        $result.sortie = Get-Fin $out 2500
+        $result.erreurs = Get-Fin $err 1000
+        if (-not $fini) {
+            $result.detail = "arrêté après $delai secondes"
+        } elseif ($result.code -eq 0 -and -not $err.Trim()) {
+            $result.ok = $true
+            $result.detail = 'script terminé (code 0)'
+        } elseif ($result.code -eq 0) {
+            $result.ok = $true
+            $result.detail = 'script terminé (code 0), avec des erreurs écrites'
+        } else {
+            $result.detail = "le script a rendu le code $($result.code)"
+        }
+    } finally {
+        Remove-Item -Path $fichier, $sortie, $erreurs -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Save-Fichier($p) {
+    if ($p.url -notmatch '^https://') { throw 'adresse de téléchargement illisible' }
+    if ($p.nom -notmatch '^[A-Za-z0-9][A-Za-z0-9 ._()+-]{0,150}\.[A-Za-z0-9]{1,10}$') { throw 'nom de fichier refusé' }
+    $dest = [string]$p.destination
+    if ($dest -notmatch '^[A-Za-z]:\\' -or $dest -match '\.\.' -or $dest -match '[<>"|?*]' -or $dest.Length -gt 240) { throw 'dossier de destination refusé' }
+    if (-not (Test-Path -LiteralPath $dest)) { New-Item -ItemType Directory -Path $dest -Force | Out-Null }
+    $cible = Join-Path $dest $p.nom
+    $partiel = $cible + '.part'
+    Remove-Item -LiteralPath $partiel -Force -ErrorAction SilentlyContinue
+    $curl = Join-Path $env:SystemRoot 'System32\curl.exe'
+    if (Test-Path -LiteralPath $curl) {
+        $out = & $curl -L --fail --silent --show-error --retry 3 -o $partiel $p.url 2>&1 | Out-String
+        if ($LASTEXITCODE -ne 0) {
+            Remove-Item -LiteralPath $partiel -Force -ErrorAction SilentlyContinue
+            throw "téléchargement impossible (curl $LASTEXITCODE) : $(Get-Fin $out 200)"
+        }
+    } else {
+        Invoke-WebRequest -Uri $p.url -OutFile $partiel -UseBasicParsing
+    }
+    $taille = (Get-Item -LiteralPath $partiel).Length
+    if ($p.taille -and [int64]$p.taille -ne $taille) {
+        Remove-Item -LiteralPath $partiel -Force -ErrorAction SilentlyContinue
+        throw "téléchargement incomplet ($taille octets sur $($p.taille))"
+    }
+    Move-Item -LiteralPath $partiel -Destination $cible -Force
+    $result.ok = $true
+    $result.taille = $taille
+    $result.detail = "posé dans $cible"
+}
+
 # --- Entrée --------------------------------------------------------------------
 
 try {
@@ -351,6 +449,8 @@ try {
             } else { Disable-Evenement }
         }
         'supervision' { if ($p.actif) { Install-Sonde $p } else { Remove-Sonde } }
+        'script' { Invoke-Script $p }
+        'fichier' { Save-Fichier $p }
         default { $result.detail = "opération inconnue : $($p.op)" }
     }
 } catch {

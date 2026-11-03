@@ -225,6 +225,23 @@ passerelle et vers 1.1.1.1. Elle les envoie directement à AVDiagram
 Sans réseau, les mesures attendent (10 au plus). Un 401 (sonde retirée ou
 remplacée) désactive la tâche. Le jeton de sonde n'ouvre que cette route.
 
+## Envois : scripts approuvés et fichiers
+
+L'onglet « Envois » de la page Postes d'AVDiagram (migration 0075) tient une
+bibliothèque :
+
+- des scripts PowerShell, qu'un administrateur approuve avant tout envoi. Un
+  script approuvé ne se modifie plus : pour le changer, on en crée un autre.
+  L'outil relit le script dans AVDiagram (`GET /api/v1/postes/envois/<id>`),
+  vérifie qu'il est toujours approuvé et que son empreinte SHA-256 est celle de
+  la demande, puis `agent/pilote.ps1` la vérifie encore sur le poste avant de
+  le lancer (compte SYSTEM, 5 minutes au plus, sortie rendue dans le résultat
+  de la tâche). Environ 12 000 caractères au plus : au-delà, la commande ne
+  passe plus par MeshCentral et la tâche le dit ;
+- des fichiers (fond d'écran, preset vMix, licence...), que le poste télécharge
+  lui-même par une adresse signée dans le dossier choisi
+  (`C:\Users\Public\Desktop` par défaut), taille vérifiée.
+
 ## Test sur 2 postes
 
 ```bash
