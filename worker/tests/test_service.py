@@ -13,6 +13,7 @@ from pcm.store import Store
 from pcm import software as sw
 from test_inventory import FIXTURE, agent_output
 from test_software import winget_output
+from test_installers import params_of, reply as pnin_reply
 
 
 class FakeMesh:
@@ -28,8 +29,16 @@ class FakeMesh:
             raise MeshError(self.fail)
         return self.devices
 
+    def upload(self, device_id, local_path, remote_dir, timeout=None):
+        self.packages.append(("upload", Path(local_path).name))
+
     def run_powershell(self, device_id, command, timeout=None):
         self.commands.append(device_id)
+        if "$env:PNIN_NONCE='" in command:
+            nonce = command.split("$env:PNIN_NONCE='", 1)[1].split("'", 1)[0]
+            mode = params_of(command)["mode"]
+            self.packages.append((mode, None))
+            return pnin_reply(nonce, found=False, free=10**12) if mode == "check" else pnin_reply(nonce, code=3010)
         if "$env:PNWG_NONCE='" in command:
             nonce = command.split("$env:PNWG_NONCE='", 1)[1].split("'", 1)[0]
             pkg = command.split("$env:PNWG_ID='", 1)[1].split("'", 1)[0]
@@ -113,6 +122,34 @@ class ServiceTests(unittest.TestCase):
         self.assertIn("2 logiciels : 1 installé, 1 en échec", result)
         self.assertIn("Zoom (logiciel ouvert", result)
         self.assertIn("Fiche à jour", result)
+
+    def test_software_task_runs_nas_installers_after_winget(self):
+        folder = Path(self.tmp.name) / "installeurs"
+        folder.mkdir()
+        (folder / "vmix29.exe").write_bytes(b"x")
+        cfg = Path(self.tmp.name) / "installeurs.json"
+        cfg.write_text(json.dumps({"installeurs": [{"nom": "vMix", "fichier": "vmix29.exe", "detection": "vMix*"}]}))
+        avd = FakeAvd([task(action="logiciels")])
+        mesh = FakeMesh([PN01])
+        svc = self.service(mesh, avd, profile_path=self.profile(["VideoLAN.VLC"]), installers_path=str(cfg), installers_dir=str(folder))
+        svc.tick()
+        self.assertEqual([p[0] for p in mesh.packages], ["VideoLAN.VLC", "check", "upload", "install"])
+        (_, ok, result), = avd.finished
+        self.assertTrue(ok)
+        self.assertIn("2 logiciels : 1 installé, 1 redémarrage demandé. Redémarrage demandé : vMix", result)
+
+    def test_installers_alone_work_without_winget_profile(self):
+        folder = Path(self.tmp.name) / "installeurs"
+        folder.mkdir()
+        (folder / "a.msi").write_bytes(b"x")
+        cfg = Path(self.tmp.name) / "installeurs.json"
+        cfg.write_text(json.dumps([{"nom": "ATEM", "fichier": "a.msi", "detection": "Blackmagic ATEM*"}]))
+        avd = FakeAvd([task(action="logiciels")])
+        mesh = FakeMesh([PN01])
+        self.service(mesh, avd, profile_path=str(Path(self.tmp.name) / "absent.json"), installers_path=str(cfg), installers_dir=str(folder)).tick()
+        (_, ok, result), = avd.finished
+        self.assertTrue(ok)
+        self.assertIn("1 logiciel : 1 redémarrage demandé", result)
 
     def test_software_task_without_profile_fails_clearly(self):
         avd = FakeAvd([task(action="logiciels")])

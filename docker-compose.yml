@@ -9,6 +9,7 @@ services:
     volumes:
       - ./data:/data
       - ./config:/config:ro
+      - ./installeurs:/installeurs:ro
     mem_limit: 256m
     restart: "no"
 
@@ -21,6 +22,7 @@ services:
     volumes:
       - ./data:/data
       - ./config:/config:ro
+      - ./installeurs:/installeurs:ro
     mem_limit: 256m
     restart: unless-stopped
     logging:

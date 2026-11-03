@@ -19,7 +19,7 @@ class ProfileTests(unittest.TestCase):
         packages = sw.load_profile(EXAMPLE)
         ids = [p.id for p in packages]
         self.assertIn("Bitfocus.Companion", ids)
-        self.assertIn("Microsoft.Office", ids)
+        self.assertNotIn("Microsoft.Office", ids)  # par les installeurs du NAS (empreinte winget instable)
         self.assertNotIn("Apple.QuickTime", ids)
         self.assertEqual(len(ids), len(set(ids)))
 

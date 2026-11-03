@@ -88,6 +88,17 @@ class MeshCtrl:
         """Exécute une commande PowerShell sur le poste et rend sa sortie."""
         return self._run("runcommand", "--id", device_id, "--powershell", "--reply", "--run", command, timeout=timeout)
 
+    def upload(self, device_id: str, local_path: str, remote_dir: str, timeout: int | None = None) -> None:
+        """Envoie un fichier dans un dossier du poste, sous le même nom.
+
+        meshctrl rend 0 même quand l'envoi échoue : on lit sa sortie, qui finit
+        par « Upload done, N bytes sent. » quand tout est passé.
+        """
+        out = self._run("upload", "--id", device_id, "--file", local_path, "--target", remote_dir, timeout=timeout)
+        if "Upload done" not in out:
+            last = (out.strip().splitlines() or ["(sortie vide)"])[-1]
+            raise MeshError(f"meshctrl upload : envoi non terminé : {last[:200]}")
+
 
 def parse_device(node: dict) -> Device:
     return Device(

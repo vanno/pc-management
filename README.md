@@ -99,12 +99,71 @@ Points connus :
   cours d'événement.
 - Adobe Creative Cloud installe le lanceur seul. Premiere Pro, After Effects,
   Photoshop se posent ensuite depuis le lanceur, avec une session Adobe.
+- Microsoft 365 ne passe pas par winget : le paquet Microsoft.Office pointe
+  vers un setup.exe que Microsoft remplace sans changer l'adresse, d'où
+  l'erreur 0x8A150011 (empreinte différente). Il passe par les installeurs du
+  NAS, voir plus bas.
 - Microsoft 365 s'installe sans licence : la connexion se fait au premier
   lancement.
 - QuickTime est exclu : Apple ne le met plus à jour depuis 2016 et ses failles
   ne sont pas corrigées.
 - vMix, Blackmagic ATEM Switchers et DaVinci Resolve ne sont pas dans winget :
-  à installer à part pour l'instant.
+  voir « Installeurs du NAS » ci-dessous.
+
+## Installeurs du NAS (vMix, ATEM, DaVinci)
+
+Le même bouton installe aussi, après winget, les logiciels hors winget à partir
+d'installeurs déposés sur le NAS. Le poste ne télécharge rien : le fichier lui
+est envoyé par MeshCentral (`meshctrl upload`), lancé en silencieux sous le
+compte SYSTEM, puis effacé.
+
+1. Télécharger l'installeur Windows sur le site de l'éditeur. Pour ATEM et
+   DaVinci, Blackmagic livre un ZIP : l'extraire et ne garder que le .exe ou le
+   .msi qu'il contient.
+2. Le déposer dans `installeurs/` à côté de `docker-compose.yml`.
+3. Le décrire dans `config/installeurs.json` (modèle :
+   `config/installeurs.example.json`) :
+
+| Champ | Rôle |
+|---|---|
+| `nom` | nom affiché sur la page Postes |
+| `fichier` | nom du .exe ou .msi dans `installeurs/` |
+| `detection` | motif du nom dans Programmes et fonctionnalités, ex. `vMix*` |
+| `version` | facultatif. Vide : un logiciel déjà présent est laissé tel quel. Rempli (ex. `29`) : toute autre version est remplacée |
+| `arguments` | arguments de l'installation silencieuse. Un .msi reçoit déjà `/qn /norestart` |
+| `configuration` | facultatif : texte écrit dans configuration.xml sur le poste, `{configuration}` dans `arguments` devient son chemin |
+
+Tester un poste sans refaire winget :
+
+```bash
+docker compose run --rm pcm software --only PN09 --installers-only
+```
+
+Arguments silencieux du modèle, à valider sur PN09 avant tout le parc : ils
+viennent de sources tierces, pas de l'éditeur.
+
+- vMix : `/VERYSILENT /SUPPRESSMSGBOXES /NORESTART` (installeur Inno Setup,
+  cité sur le forum vMix).
+- ATEM : le .msi du ZIP, sans argument de plus. Le pilote Blackmagic peut
+  demander une confirmation de sécurité Windows qui bloquerait l'installation
+  silencieuse : à vérifier au premier essai.
+- DaVinci Resolve : `/i /q /noreboot` (SilentInstallHQ, version 18).
+- Microsoft 365 : l'outil de déploiement d'Office (setup.exe) avec
+  `/configure {configuration}`. Le champ `configuration` du modèle installe
+  O365BusinessRetail, l'identifiant de Microsoft 365 Business Standard et
+  Business Premium selon Microsoft (« Product IDs supported by the Office
+  Deployment Tool »), en 64 bits, langue de Windows, canal Current, mises à
+  jour automatiques. Office se télécharge depuis Microsoft. Pour récupérer
+  setup.exe :
+
+```bash
+curl -L -o installeurs/setup.exe https://officecdn.microsoft.com/pr/wsus/setup.exe
+```
+
+L'envoi passe par le relais MeshCentral du NAS : compter le temps de
+l'installeur de DaVinci (plusieurs Go) au débit montant de l'agence quand le
+poste est dehors. Une tâche de plus de 3 heures passe en échec sur la page.
+Le disque du poste doit avoir trois fois la taille de l'installeur de libre.
 
 ## Test sur 2 postes
 

@@ -153,7 +153,7 @@ def summary(outcomes: list[Outcome]) -> str:
     order = ["installed", "updated", "uptodate", "reboot", "failed"]
     plural = {"installed": "installés"}
     parts = [f"{counts[s]} {plural.get(s, LABELS[s]) if counts[s] > 1 else LABELS[s]}" for s in order if counts.get(s)]
-    text = f"{len(outcomes)} logiciels : " + ", ".join(parts)
+    text = f"{len(outcomes)} logiciel{'s' if len(outcomes) > 1 else ''} : " + ", ".join(parts)
     reboot = [o.package.name for o in outcomes if o.state == "reboot"]
     failed = [f"{o.package.name} ({o.detail})" for o in outcomes if o.state == "failed"]
     if reboot:

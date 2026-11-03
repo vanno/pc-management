@@ -1,0 +1,2 @@
+Installeurs hors winget (vMix, ATEM, DaVinci...) : déposer ici les .exe ou .msi
+nommés dans config/installeurs.json. Ce dossier n'est pas suivi par git.

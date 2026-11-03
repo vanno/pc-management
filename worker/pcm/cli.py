@@ -5,6 +5,7 @@
     pcm inventory --push              idem, puis écriture des fiches AVDiagram
                                       (série, version Windows, inventaire détaillé)
     pcm software --only PN09          installe le profil de logiciels sur ces postes
+    pcm software --only PN09 --installers-only   seulement vMix, ATEM, DaVinci depuis le NAS
     pcm serve                         service : exécute les tâches demandées
                                       depuis la page Postes d'AVDiagram
 
@@ -105,10 +106,14 @@ def cmd_inventory(args, mesh: MeshCtrl) -> int:
 
 
 def cmd_software(args, mesh: MeshCtrl) -> int:
+    from . import installers as ins
     from . import software as sw
+    from .service import load_software
 
     mapping = load_mapping(args.mapping)
-    packages = sw.load_profile(args.profile)
+    packages, installers = load_software(args.profile, args.installers, args.installers_dir)
+    if args.installers_only:
+        packages = []
     wanted = {t.strip().upper() for t in args.only.split(",") if t.strip()}
     devices = [d for d in mesh.list_devices(args.group) if d.is_windows and inv.asset_tag_for(d.name, mapping).upper() in wanted]
     failed = False
@@ -118,9 +123,11 @@ def cmd_software(args, mesh: MeshCtrl) -> int:
             failed = True
             continue
         outcomes = []
-        for p in packages:
-            o = sw.install(mesh, d.id, p, inv.new_nonce())
-            print(f"{d.name} {p.id} : {sw.LABELS[o.state]}{' : ' + o.detail if o.detail else ''}", flush=True)
+        steps = [(p.id, lambda p=p: sw.install(mesh, d.id, p, inv.new_nonce())) for p in packages]
+        steps += [(i.name, lambda i=i: ins.install(mesh, d.id, i, inv.new_nonce)) for i in installers]
+        for label, run in steps:
+            o = run()
+            print(f"{d.name} {label} : {sw.LABELS[o.state]}{' : ' + o.detail if o.detail else ''}", flush=True)
             outcomes.append(o)
         print(f"{d.name} : {sw.summary(outcomes)}")
         failed = failed or not all(o.ok for o in outcomes)
@@ -174,10 +181,13 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--concurrency", type=int, default=1)
     p.add_argument("--db", default=os.environ.get("PCM_DB", "data/pcm.sqlite"))
     p.add_argument("--mapping", default=os.environ.get("PCM_MAPPING", "config/mapping.json"))
-    w = sub.add_parser("software", help="Installer le profil de logiciels sur des postes (winget)")
+    w = sub.add_parser("software", help="Installer le profil de logiciels sur des postes (winget, puis installeurs du NAS)")
     w.add_argument("--only", required=True, help="Références de parc séparées par des virgules, ex. PN09")
     w.add_argument("--profile", default=os.environ.get("PCM_SOFTWARE", "config/logiciels.json"))
     w.add_argument("--mapping", default=os.environ.get("PCM_MAPPING", "config/mapping.json"))
+    w.add_argument("--installers", default=os.environ.get("PCM_INSTALLERS", "config/installeurs.json"))
+    w.add_argument("--installers-dir", default=os.environ.get("PCM_INSTALLERS_DIR", "installeurs"))
+    w.add_argument("--installers-only", action="store_true", help="Seulement les installeurs du NAS (vMix, ATEM, DaVinci), sans winget")
     s = sub.add_parser("serve", help="Service : battement vers AVDiagram et tâches de la page Postes")
     s.add_argument("--interval", type=float, default=float(os.environ.get("PCM_INTERVAL", "30")), help="Secondes entre deux battements (30 par défaut)")
     s.add_argument("--push-ip", action="store_true", help="Écrire aussi l'adresse IP sur la fiche")

@@ -20,6 +20,7 @@ from datetime import datetime, timezone
 from typing import Callable
 
 from . import inventory as inv
+from . import installers as ins
 from . import software as sw
 from .avdiagram import AvdClient, AvdError
 from .meshctrl import Device, MeshCtrl, MeshError
@@ -28,6 +29,18 @@ from .sync import process
 
 SOURCE = "pc-management"
 RESULT_MAX = 4000
+
+
+def load_software(profile_path, installers_path, installers_dir):
+    """Le profil winget et les installeurs du NAS. L'un des deux peut manquer, pas les deux."""
+    installers = ins.load_installers(installers_path, installers_dir)
+    try:
+        packages = sw.load_profile(profile_path)
+    except sw.SoftwareError:
+        if installers and not os.path.exists(profile_path):
+            return [], installers
+        raise
+    return packages, installers
 
 
 def log(message: str) -> None:
@@ -47,6 +60,8 @@ class Service:
         push_ip: bool = False,
         logger: Callable[[str], None] = log,
         profile_path: str | None = None,
+        installers_path: str | None = None,
+        installers_dir: str | None = None,
         pulse_interval: float = 30,
     ):
         self.mesh = mesh
@@ -58,6 +73,8 @@ class Service:
         self.push_ip = push_ip
         self.log = logger
         self.profile_path = profile_path or os.environ.get("PCM_SOFTWARE", "config/logiciels.json")
+        self.installers_path = installers_path or os.environ.get("PCM_INSTALLERS", "config/installeurs.json")
+        self.installers_dir = installers_dir or os.environ.get("PCM_INSTALLERS_DIR", "installeurs")
         self.pulse_interval = pulse_interval
         self.seen: list[dict] = []
 
@@ -119,20 +136,24 @@ class Service:
         return self.inventory(device, tag)
 
     def install_profile(self, device: Device, tag: str) -> tuple[bool, str]:
-        """Le profil de logiciels, un logiciel à la fois, puis un inventaire pour la fiche."""
+        """Le profil winget puis les installeurs du NAS, un logiciel à la fois, puis un inventaire."""
         try:
-            packages = sw.load_profile(self.profile_path)
-        except sw.SoftwareError as exc:
+            packages, installers = load_software(self.profile_path, self.installers_path, self.installers_dir)
+        except (sw.SoftwareError, ins.InstallerError) as exc:
             return False, _short(str(exc))
         outcomes = []
         for package in packages:
-            outcome = sw.install(self.mesh, device.id, package, inv.new_nonce())
-            self.log(f"{tag} {package.id} : {sw.LABELS[outcome.state]}{' : ' + outcome.detail if outcome.detail else ''}")
-            outcomes.append(outcome)
+            outcomes.append(self._logged(tag, package.id, sw.install(self.mesh, device.id, package, inv.new_nonce())))
+        for inst in installers:
+            outcomes.append(self._logged(tag, inst.name, ins.install(self.mesh, device.id, inst, inv.new_nonce)))
         text = sw.summary(outcomes)
         inv_ok, inv_text = self.inventory(device, tag)
         text += ". Fiche à jour" if inv_ok else f". Inventaire après installation impossible : {inv_text}"
         return all(o.ok for o in outcomes), _short(text)
+
+    def _logged(self, tag: str, label: str, outcome: sw.Outcome) -> sw.Outcome:
+        self.log(f"{tag} {label} : {sw.LABELS[outcome.state]}{' : ' + outcome.detail if outcome.detail else ''}")
+        return outcome
 
     def inventory(self, device: Device, tag: str) -> tuple[bool, str]:
         nonce = inv.new_nonce()

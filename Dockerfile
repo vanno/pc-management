@@ -20,7 +20,9 @@ ENV PYTHONPATH=/app/worker \
     MESHCTRL_CMD="node /opt/meshctrl/node_modules/meshcentral/meshctrl.js" \
     PCM_DB=/data/pcm.sqlite \
     PCM_MAPPING=/config/mapping.json \
-    PCM_SOFTWARE=/config/logiciels.json
+    PCM_SOFTWARE=/config/logiciels.json \
+    PCM_INSTALLERS=/config/installeurs.json \
+    PCM_INSTALLERS_DIR=/installeurs
 
 USER node
 ENTRYPOINT ["python3", "-m", "pcm"]
