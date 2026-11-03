@@ -177,6 +177,37 @@ l'installeur de DaVinci (plusieurs Go) au débit montant de l'agence quand le
 poste est dehors. Une tâche de plus de 3 heures passe en échec sur la page.
 Le disque du poste doit avoir trois fois la taille de l'installeur de libre.
 
+## Pilotage depuis la page Postes
+
+Les boutons Redémarrer, Éteindre, Réveiller, Mode événement et le formulaire
+Réseau de la page Postes passent par `agent/pilote.ps1`, envoyé au poste
+compressé (gzip puis base64) comme les autres scripts.
+
+- Redémarrer, Éteindre : `shutdown.exe /r` ou `/s`, `/f /t 30`, avec un
+  message à l'écran. Refusé en mode événement.
+- Réveiller : `meshctrl devicepower --wake`. Le serveur et chaque agent
+  connecté envoient le paquet magique aux adresses MAC connues du poste.
+  Il faut le Wake-on-LAN actif dans le BIOS et la carte réseau du poste.
+- Mode événement : Windows Update en pause 7 jours (clés `Pause*` de
+  `HKLM\SOFTWARE\Microsoft\WindowsUpdate\UX\Settings`), pas de redémarrage
+  automatique, veille et extinction d'écran à 0 sur secteur et batterie,
+  notifications coupées (`ToastEnabled` des comptes ouverts). Les réglages
+  d'avant sont gardés dans `C:\ProgramData\PointeNoire\mode-evenement.json`
+  et remis par « Fin du mode événement ». Installer les logiciels est refusé
+  tant que le fichier existe.
+- Réseau : la commande garde la configuration de la carte dans
+  `C:\ProgramData\PointeNoire\reseau\avant.json`, puis lance une tâche
+  planifiée `PointeNoire-Reseau` (SYSTEM) qui applique la demande et teste
+  pendant 90 s une connexion TCP vers l'hôte de `MESHCTRL_URL`. Sans réponse,
+  elle remet la configuration d'avant. Le worker relit le résultat une fois
+  l'agent revenu (jusqu'à 5 minutes). Sans retour automatique (réseau fermé
+  d'une régie), le poste ne répond plus jusqu'à son retour sur un réseau qui
+  joint MeshCentral.
+
+Le battement envoie aussi, pour chaque poste, le lien vers sa page MeshCentral
+(`https://<hôte>/?gotonode=<id>&viewmode=10`) : la page Postes l'affiche en
+« Ouvrir dans MeshCentral » (bureau à distance, fichiers, terminal).
+
 ## Test sur 2 postes
 
 ```bash

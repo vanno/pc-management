@@ -15,12 +15,14 @@ from __future__ import annotations
 import os
 import signal
 import threading
+import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Callable
 
 from . import inventory as inv
 from . import installers as ins
+from . import pilot
 from . import software as sw
 from .avdiagram import AvdClient, AvdError
 from .meshctrl import Device, MeshCtrl, MeshError
@@ -29,6 +31,7 @@ from .sync import process
 
 SOURCE = "pc-management"
 RESULT_MAX = 4000
+ACTIONS = ("inventaire", "logiciels", "alimentation", "reseau", "mode_evenement")
 
 
 def load_software(profile_path, installers_path, installers_dir, avd=None):
@@ -79,6 +82,8 @@ class Service:
         installers_path: str | None = None,
         installers_dir: str | None = None,
         pulse_interval: float = 30,
+        sleep: Callable[[float], None] = time.sleep,
+        pilot_script: str | None = None,
     ):
         self.mesh = mesh
         self.avd = avd
@@ -92,14 +97,17 @@ class Service:
         self.installers_path = installers_path or os.environ.get("PCM_INSTALLERS", "config/installeurs.json")
         self.installers_dir = installers_dir or os.environ.get("PCM_INSTALLERS_DIR", "installeurs")
         self.pulse_interval = pulse_interval
+        self.sleep = sleep
+        self.pilot_script = pilot_script
         self.seen: list[dict] = []
 
     def tick(self) -> int:
         """Un battement. Rend le nombre de tâches traitées (0 ou 1)."""
         devices = [d for d in self.mesh.list_devices(self.group) if d.is_windows]
         by_tag = {inv.asset_tag_for(d.name, self.mapping).upper(): d for d in devices}
+        mesh_url = os.environ.get("MESHCTRL_URL")
         seen = [
-            {"name": d.name, "asset_tag": tag, "online": d.online, "os": d.os}
+            {"name": d.name, "asset_tag": tag, "online": d.online, "os": d.os, "link": pilot.device_link(mesh_url, d.id)}
             for tag, d in sorted(by_tag.items())
         ]
         self.seen = seen
@@ -138,18 +146,42 @@ class Service:
     def run_task(self, task: dict, by_tag: dict[str, Device]) -> tuple[bool, str]:
         action = task.get("action")
         tag = (task.get("asset_tag") or "").strip().upper()
-        if action not in ("inventaire", "logiciels"):
+        if action not in ACTIONS:
             return False, f"Action inconnue de cette version de pc-management : {action}. Mettez l'outil à jour sur le NAS."
         if not tag:
             return False, "La fiche de ce poste n'existe plus."
         device = by_tag.get(tag)
         if device is None:
             return False, f"MeshCentral ne connaît aucun agent nommé {tag} (ni dans config/mapping.json)."
+        params = task.get("params") or {}
+        if action == "alimentation" and params.get("mode") == "reveiller":
+            if device.online:
+                return True, f"{device.name} est déjà allumé et en ligne."
+            return pilot.power(self.mesh, device.id, params, inv.new_nonce, script=self.pilot_script)
         if not device.online:
             return False, f"{device.name} est hors ligne dans MeshCentral."
+        if action == "alimentation":
+            return pilot.power(self.mesh, device.id, params, inv.new_nonce, script=self.pilot_script)
+        if action == "mode_evenement":
+            return pilot.event_mode(self.mesh, device.id, params, inv.new_nonce, script=self.pilot_script)
+        if action == "reseau":
+            ok, text = pilot.network(self.mesh, device.id, params, os.environ.get("MESHCTRL_URL"), inv.new_nonce, sleep=self.sleep, script=self.pilot_script)
+            return ok, _short(text)
         if action == "logiciels":
             return self.install_profile(device, tag)
         return self.inventory(device, tag)
+
+    def _event_refusal(self, device: Device) -> str | None:
+        """Un poste en mode événement ne reçoit pas d'installation. Un poste qui
+        ne sait pas répondre (ancienne version, panne passagère) n'est pas bloqué."""
+        try:
+            st = pilot.state(self.mesh, device.id, inv.new_nonce, script=self.pilot_script)
+        except (MeshError, pilot.PilotError) as exc:
+            self.log(f"{device.name} : état du mode événement illisible ({exc}), installation lancée")
+            return None
+        if st.get("evenement"):
+            return f"Refusé : {device.name} est en mode événement depuis le {str(st.get('depuis') or '?')[:16].replace('T', ' ')}. Terminez le mode événement d'abord."
+        return None
 
     def install_profile(self, device: Device, tag: str) -> tuple[bool, str]:
         """Le profil winget puis les installeurs du NAS, un logiciel à la fois, puis un inventaire."""
@@ -157,6 +189,9 @@ class Service:
             packages, installers = load_software(self.profile_path, self.installers_path, self.installers_dir, self.avd)
         except (sw.SoftwareError, ins.InstallerError, AvdError) as exc:
             return False, _short(str(exc))
+        refused = self._event_refusal(device)
+        if refused:
+            return False, refused
         outcomes = []
         for package in packages:
             outcomes.append(self._logged(tag, package.id, sw.install(self.mesh, device.id, package, inv.new_nonce())))
