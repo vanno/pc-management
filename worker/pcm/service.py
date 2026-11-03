@@ -12,14 +12,15 @@ C'est le NAS qui appelle AVDiagram : aucun port n'est ouvert vers lui.
 
 from __future__ import annotations
 
+import os
 import signal
-import sys
 import threading
-import time
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Callable
 
 from . import inventory as inv
+from . import software as sw
 from .avdiagram import AvdClient, AvdError
 from .meshctrl import Device, MeshCtrl, MeshError
 from .store import Store
@@ -45,6 +46,8 @@ class Service:
         group: str | None = None,
         push_ip: bool = False,
         logger: Callable[[str], None] = log,
+        profile_path: str | None = None,
+        pulse_interval: float = 30,
     ):
         self.mesh = mesh
         self.avd = avd
@@ -54,6 +57,9 @@ class Service:
         self.group = group
         self.push_ip = push_ip
         self.log = logger
+        self.profile_path = profile_path or os.environ.get("PCM_SOFTWARE", "config/logiciels.json")
+        self.pulse_interval = pulse_interval
+        self.seen: list[dict] = []
 
     def tick(self) -> int:
         """Un battement. Rend le nombre de tâches traitées (0 ou 1)."""
@@ -63,19 +69,43 @@ class Service:
             {"name": d.name, "asset_tag": tag, "online": d.online, "os": d.os}
             for tag, d in sorted(by_tag.items())
         ]
+        self.seen = seen
         tasks = self.avd.heartbeat(SOURCE, seen, limit=1)
         for task in tasks:
-            ok, result = self.run_task(task, by_tag)
+            with self._pulse():
+                ok, result = self.run_task(task, by_tag)
             kept = self.avd.finish_task(task["id"], ok, result)
             state = "fait" if ok else "échec"
             suffix = "" if kept else " (AVDiagram ne l'attendait plus)"
             self.log(f"tâche {task['id']} {task.get('action')} {task.get('asset_tag')} : {state} : {result}{suffix}")
         return len(tasks)
 
+    @contextmanager
+    def _pulse(self):
+        """Pendant une tâche longue (une installation peut durer une demi-heure),
+        un battement sans prise de tâche garde la page Postes informée que
+        l'outil est vivant."""
+        stop = threading.Event()
+
+        def beat():
+            while not stop.wait(self.pulse_interval):
+                try:
+                    self.avd.heartbeat(SOURCE, self.seen, limit=0)
+                except Exception as exc:  # un battement manqué n'arrête pas la tâche
+                    self.log(f"battement pendant la tâche en échec : {exc}")
+
+        thread = threading.Thread(target=beat, daemon=True)
+        thread.start()
+        try:
+            yield
+        finally:
+            stop.set()
+            thread.join(5)
+
     def run_task(self, task: dict, by_tag: dict[str, Device]) -> tuple[bool, str]:
         action = task.get("action")
         tag = (task.get("asset_tag") or "").strip().upper()
-        if action != "inventaire":
+        if action not in ("inventaire", "logiciels"):
             return False, f"Action inconnue de cette version de pc-management : {action}. Mettez l'outil à jour sur le NAS."
         if not tag:
             return False, "La fiche de ce poste n'existe plus."
@@ -84,7 +114,25 @@ class Service:
             return False, f"MeshCentral ne connaît aucun agent nommé {tag} (ni dans config/mapping.json)."
         if not device.online:
             return False, f"{device.name} est hors ligne dans MeshCentral."
+        if action == "logiciels":
+            return self.install_profile(device, tag)
         return self.inventory(device, tag)
+
+    def install_profile(self, device: Device, tag: str) -> tuple[bool, str]:
+        """Le profil de logiciels, un logiciel à la fois, puis un inventaire pour la fiche."""
+        try:
+            packages = sw.load_profile(self.profile_path)
+        except sw.SoftwareError as exc:
+            return False, _short(str(exc))
+        outcomes = []
+        for package in packages:
+            outcome = sw.install(self.mesh, device.id, package, inv.new_nonce())
+            self.log(f"{tag} {package.id} : {sw.LABELS[outcome.state]}{' : ' + outcome.detail if outcome.detail else ''}")
+            outcomes.append(outcome)
+        text = sw.summary(outcomes)
+        inv_ok, inv_text = self.inventory(device, tag)
+        text += ". Fiche à jour" if inv_ok else f". Inventaire après installation impossible : {inv_text}"
+        return all(o.ok for o in outcomes), _short(text)
 
     def inventory(self, device: Device, tag: str) -> tuple[bool, str]:
         nonce = inv.new_nonce()

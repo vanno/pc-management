@@ -77,6 +77,35 @@ MeshCentral ne connaît aucun agent à ce nom, ou quand l'action est inconnue de
 cette version de l'outil. Une tâche prise et restée sans réponse 30 minutes
 passe en échec côté AVDiagram.
 
+## Profil de logiciels
+
+Un seul profil pour tous les postes, dans `config/logiciels.json` (copié de
+`config/logiciels.example.json`, non suivi par git). Le bouton « Installer les
+logiciels » de la page Postes installe par winget ce qui manque, met à jour le
+reste, puis refait l'inventaire du poste.
+
+```bash
+cp config/logiciels.example.json config/logiciels.json
+docker compose run --rm pcm software --only PN09   # test sur un poste
+```
+
+Chaque logiciel passe par un appel MeshCentral séparé, avec 30 minutes au plus.
+Une tâche « logiciels » reste « En cours » jusqu'à 3 heures avant de passer en
+échec côté AVDiagram (Office et Creative Cloud sont longs).
+
+Points connus :
+
+- Une mise à jour ferme le logiciel ouvert : à ne pas lancer sur un poste en
+  cours d'événement.
+- Adobe Creative Cloud installe le lanceur seul. Premiere Pro, After Effects,
+  Photoshop se posent ensuite depuis le lanceur, avec une session Adobe.
+- Microsoft 365 s'installe sans licence : la connexion se fait au premier
+  lancement.
+- QuickTime est exclu : Apple ne le met plus à jour depuis 2016 et ses failles
+  ne sont pas corrigées.
+- vMix, Blackmagic ATEM Switchers et DaVinci Resolve ne sont pas dans winget :
+  à installer à part pour l'instant.
+
 ## Test sur 2 postes
 
 ```bash
