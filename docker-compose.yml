@@ -1,0 +1,11 @@
+# Sur le NAS (Container Manager) : docker compose run --rm pcm inventory
+services:
+  pcm:
+    build: .
+    image: pointe-noire/pcm:latest
+    env_file: .env
+    volumes:
+      - ./data:/data
+      - ./config:/config:ro
+    mem_limit: 256m
+    restart: "no"
