@@ -99,6 +99,10 @@ Points connus :
   cours d'événement.
 - Adobe Creative Cloud installe le lanceur seul. Premiere Pro, After Effects,
   Photoshop se posent ensuite depuis le lanceur, avec une session Adobe.
+- Microsoft 365 ne passe pas par winget : le paquet Microsoft.Office pointe
+  vers un setup.exe que Microsoft remplace sans changer l'adresse, d'où
+  l'erreur 0x8A150011 (empreinte différente). Il passe par les installeurs du
+  NAS, voir plus bas.
 - Microsoft 365 s'installe sans licence : la connexion se fait au premier
   lancement.
 - QuickTime est exclu : Apple ne le met plus à jour depuis 2016 et ses failles
@@ -143,6 +147,15 @@ viennent de sources tierces, pas de l'éditeur.
   demander une confirmation de sécurité Windows qui bloquerait l'installation
   silencieuse : à vérifier au premier essai.
 - DaVinci Resolve : `/i /q /noreboot` (SilentInstallHQ, version 18).
+- Microsoft 365 : l'outil de déploiement d'Office (setup.exe) avec
+  `/configure https://aka.ms/fhlwingetconfig`, la configuration utilisée par
+  winget : Microsoft 365 Apps for enterprise (O365ProPlusRetail), langue de
+  Windows, sans Skype Entreprise ni OneDrive ancien. Office se télécharge
+  ensuite depuis Microsoft et se met à jour seul. Pour récupérer setup.exe :
+
+```bash
+curl -L -o installeurs/setup.exe https://officecdn.microsoft.com/pr/wsus/setup.exe
+```
 
 L'envoi passe par le relais MeshCentral du NAS : compter le temps de
 l'installeur de DaVinci (plusieurs Go) au débit montant de l'agence quand le

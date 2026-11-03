@@ -20,6 +20,13 @@
       "detection": "DaVinci Resolve*",
       "version": "",
       "arguments": "/i /q /noreboot"
+    },
+    {
+      "nom": "Microsoft 365",
+      "fichier": "setup.exe",
+      "detection": "Microsoft 365*",
+      "version": "",
+      "arguments": "/configure https://aka.ms/fhlwingetconfig"
     }
   ]
 }
