@@ -34,6 +34,7 @@ from .meshctrl import MeshCtrl, MeshError
 
 MARKER = "PNPL1:"
 AGENT_SCRIPT = Path(__file__).resolve().parents[2] / "agent" / "pilote.ps1"
+PROBE_SCRIPT = Path(__file__).resolve().parents[2] / "agent" / "supervision.ps1"
 INTERFACE_RE = re.compile(r"^[^\W_][\w ._()&+'-]{0,79}$")
 POWER_MODES = ("redemarrer", "eteindre", "reveiller")
 # Le délai pendant lequel le poste doit joindre MeshCentral avant de revenir en arrière.
@@ -181,6 +182,30 @@ def event_mode(mesh: MeshCtrl, device_id: str, params: dict, new_nonce: Callable
         reply = call(mesh, device_id, {"op": "evenement", "actif": params["actif"], "jours": EVENT_DAYS}, new_nonce, script=script)
     except (MeshError, PilotError) as exc:
         return False, str(exc)
+    detail = reply.get("detail") or ""
+    return bool(reply.get("ok")), detail[:1].upper() + detail[1:]
+
+
+def supervision(mesh: MeshCtrl, device_id: str, unit_id: str, params: dict, avd, new_nonce: Callable[[], str], script: str | None = None) -> tuple[bool, str]:
+    """Pose la sonde (jeton tiré par AVDiagram, envoyé tel quel au poste) ou la retire.
+    Le jeton ne passe pas par le journal du worker."""
+    if not isinstance(params.get("actif"), bool):
+        return False, "Paramètre `actif` manquant."
+    if not unit_id:
+        return False, "La tâche ne dit pas quel exemplaire superviser."
+    try:
+        if params["actif"]:
+            probe = avd.create_probe(unit_id)
+            packed = base64.b64encode(gzip.compress(PROBE_SCRIPT.read_bytes(), mtime=0)).decode("ascii")
+            request = {"op": "supervision", "actif": True, "url": probe["url"], "jeton": probe["token"], "script": packed}
+        else:
+            avd.remove_probe(unit_id)
+            request = {"op": "supervision", "actif": False}
+        reply = call(mesh, device_id, request, new_nonce, script=script)
+    except (MeshError, PilotError) as exc:
+        return False, str(exc)
+    except Exception as exc:  # AvdError et réponse inattendue
+        return False, f"AVDiagram : {exc}"
     detail = reply.get("detail") or ""
     return bool(reply.get("ok")), detail[:1].upper() + detail[1:]
 

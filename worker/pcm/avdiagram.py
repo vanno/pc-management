@@ -102,6 +102,14 @@ class AvdClient:
                 return None
             raise
 
+    def create_probe(self, unit_id: str) -> dict:
+        """Pose la sonde de supervision d'un poste (0074) : { token, url }. Le
+        jeton n'est rendu qu'une fois ; il part directement au poste."""
+        return self._request("POST", "/api/v1/postes/sondes", {"unit_id": unit_id})
+
+    def remove_probe(self, unit_id: str) -> bool:
+        return bool(self._request("DELETE", "/api/v1/postes/sondes", {"unit_id": unit_id}).get("removed"))
+
     def finish_task(self, task_id: str, ok: bool, result: str) -> bool:
         """Rend le résultat d'une tâche. False si AVDiagram ne l'attend plus
         (annulée, ou expirée après 30 minutes)."""
