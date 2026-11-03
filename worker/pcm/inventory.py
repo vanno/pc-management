@@ -6,6 +6,7 @@ import base64
 import binascii
 import json
 import re
+import secrets
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -22,16 +23,25 @@ class InventoryError(ValueError):
     """La sortie d'un poste ne contient pas d'inventaire lisible."""
 
 
-def build_command(script: str | None = None) -> str:
+def new_nonce() -> str:
+    return secrets.token_hex(8)
+
+
+def build_command(script: str | None = None, nonce: str = "") -> str:
     """La commande PowerShell à passer à `meshctrl runcommand --powershell`.
 
     Le script voyage encodé en base64 pour échapper aux guillemets et aux
-    retours à la ligne, puis il est décodé et exécuté sur le poste.
+    retours à la ligne, puis il est décodé et exécuté sur le poste. Le jeton
+    `nonce` revient dans la sortie : il prouve que la réponse vient bien de
+    cette commande et pas d'une autre lancée au même moment.
     """
+    if not re.fullmatch(r"[0-9a-f]*", nonce):
+        raise InventoryError("Jeton invalide.")
     if script is None:
         script = AGENT_SCRIPT.read_text(encoding="utf-8")
     encoded = base64.b64encode(script.encode("utf-8")).decode("ascii")
     command = (
+        f"$env:PNINV_NONCE='{nonce}';"
         "$s=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('"
         + encoded
         + "'));& ([ScriptBlock]::Create($s))"
@@ -43,14 +53,21 @@ def build_command(script: str | None = None) -> str:
     return command
 
 
-def parse_output(output: str) -> dict:
-    """Extrait l'inventaire de la sortie brute renvoyée par l'agent."""
+def parse_output(output: str, nonce: str = "") -> dict:
+    """Extrait l'inventaire de la sortie brute renvoyée par l'agent.
+
+    Une sortie qui porte un autre jeton que celui envoyé est refusée : c'est la
+    réponse d'un autre poste.
+    """
     for line in reversed(output.splitlines()):
         line = line.strip()
         if not line.startswith(MARKER):
             continue
+        received, _, payload = line[len(MARKER):].partition(":")
+        if received != nonce:
+            raise InventoryError(f"Réponse d'une autre commande (jeton {received!r} au lieu de {nonce!r})")
         try:
-            data = json.loads(base64.b64decode(line[len(MARKER):], validate=True).decode("utf-8"))
+            data = json.loads(base64.b64decode(payload, validate=True).decode("utf-8"))
         except (binascii.Error, UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise InventoryError(f"Charge utile illisible : {exc}") from exc
         if data.get("schema") != SCHEMA:

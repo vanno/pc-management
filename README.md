@@ -11,9 +11,9 @@ synchronisé sur sa fiche du parc AVDiagram.
 
 1. `pcm` liste les postes Windows connectés à MeshCentral (`meshctrl listdevices`).
 2. Il envoie `agent/inventory.ps1` à chaque poste en ligne
-   (`meshctrl runcommand --powershell --reply`), quatre à la fois.
+   (`meshctrl runcommand --powershell --reply`), un poste à la fois.
    Le script tourne en compte SYSTEM, ne modifie rien, et rend une ligne
-   `PNINV1:<JSON en base64>`.
+   `PNINV1:<jeton>:<JSON en base64>`. Le jeton, différent à chaque appel, garantit que la réponse vient bien du poste interrogé.
 3. Chaque inventaire est gardé dans `data/pcm.sqlite`. Le rapport donne ce qui a
    changé depuis le précédent : logiciels ajoutés, retirés, mis à jour, matériel.
 4. Avec `--push`, la fiche AVDiagram du poste est complétée par l'outil MCP
