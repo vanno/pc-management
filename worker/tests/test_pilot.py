@@ -264,5 +264,25 @@ class PowerTests(unittest.TestCase):
         self.assertFalse(pilot.power(mesh, "n", {"mode": "formater"}, nonces())[0])
 
 
+class CleanupTests(unittest.TestCase):
+    def test_apply_and_undo(self):
+        mesh = FakeMesh({"nettoyage": [
+            {"ok": True, "detail": "profil appliqué : plan Performances optimales", "applications": ["Microsoft.BingNews"]},
+            {"ok": False, "detail": "refusé : le poste est en mode événement"},
+        ]})
+        self.assertEqual(pilot.cleanup(mesh, "n", {"actif": True, "applications": True}, nonces()), (True, "Profil appliqué : plan Performances optimales"))
+        self.assertEqual(mesh.calls[0], ({"op": "nettoyage", "actif": True, "applications": True}, pilot.CLEANUP_TIMEOUT))
+        self.assertEqual(pilot.cleanup(mesh, "n", {"actif": False, "applications": "oui"}, nonces()), (False, "Refusé : le poste est en mode événement"))
+        self.assertEqual(mesh.calls[1][0], {"op": "nettoyage", "actif": False, "applications": False})
+
+    def test_missing_flag(self):
+        self.assertFalse(pilot.cleanup(FakeMesh({}), "n", {}, nonces())[0])
+
+    def test_agent_has_the_operation(self):
+        text = pilot.AGENT_SCRIPT.read_text(encoding="utf-8")
+        self.assertIn("'nettoyage'", text)
+        self.assertNotIn("Set-MpPreference", text)
+
+
 if __name__ == "__main__":
     unittest.main()

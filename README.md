@@ -269,6 +269,30 @@ bibliothèque :
   une décision manuelle : pensez à aligner `MESHCENTRAL_VERSION` du
   Dockerfile.
 
+## Nettoyage réversible (lot 6)
+
+L'action « Nettoyer » de la page Postes applique un profil de production, et
+« Annuler le nettoyage » remet le poste comme avant. L'état d'origine est
+écrit sur le poste avant tout changement, dans
+`C:\ProgramData\PointeNoire\nettoyage.json` ; une seconde application garde
+l'état de la première.
+
+| Partie | Effet | Annulation |
+|---|---|---|
+| Alimentation | copie du plan Performances optimales (sinon Performances élevées), mise en veille sélective USB et économie PCI Express coupées | plan d'avant réactivé, copie supprimée |
+| Services | DiagTrack, dmwappushservice, MapsBroker, RetailDemo, XblAuthManager, XblGameSave, XboxNetApiSvc, Fax, lfsvc désactivés | type de démarrage d'avant |
+| Tâches | collecte de compatibilité, programme d'amélioration, retours, cartes, diagnostic disque | réactivées si elles l'étaient |
+| Réglages | télémétrie au minimum, enregistrement de jeu, applications suggérées, publicité, Cortana, widgets, démarrage rapide coupés | valeurs d'avant, ou supprimées |
+| Applications (option) | Actualités, Météo, Xbox, Solitaire, Contacts, Hub de commentaires, Clipchamp, Candy Crush… retirées pour tous les comptes | **non réinstallées** : la liste est rendue, à réinstaller depuis le Microsoft Store |
+
+Rien ne touche à Defender, au pare-feu, à Windows Update, à la recherche, aux
+manettes ni au Lecteur multimédia. Refusé en mode événement, dans les deux
+sens : le mode événement garde les réglages de veille du plan actif. Le
+démarrage rapide coupé prend effet au prochain redémarrage. Certaines
+stratégies dépendent de l'édition : d'après Microsoft, celle des applications
+suggérées n'agit que sous Entreprise et Éducation. Elles sont posées quand
+même, sans effet ailleurs. Non vérifié sur un vrai poste à l'écriture.
+
 ## Test sur 2 postes
 
 ```bash

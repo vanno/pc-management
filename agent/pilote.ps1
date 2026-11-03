@@ -17,6 +17,11 @@
                          empreinte SHA-256 n'est pas celle annoncée
         fichier          { url, nom, destination, taille } : télécharge un
                          fichier de la bibliothèque dans un dossier du poste
+        nettoyage        { actif, applications } : applique ou annule le profil
+                         de nettoyage (alimentation, services, tâches,
+                         réglages ; applications Windows inutiles si
+                         `applications`). L'état d'avant est gardé dans
+                         ProgramData\PointeNoire\nettoyage.json.
 
   Sortie : une seule ligne
       PNPL1:<jeton>:<JSON encodé en base64 UTF-8>
@@ -393,10 +398,15 @@ function Save-Fichier($p) {
     Remove-Item -LiteralPath $partiel -Force -ErrorAction SilentlyContinue
     $curl = Join-Path $env:SystemRoot 'System32\curl.exe'
     if (Test-Path -LiteralPath $curl) {
+        # Sous Windows PowerShell 5.1, la sortie d'erreur d'un programme
+        # redirigée lève une exception avec 'Stop' : le code de curl suffit.
+        $ErrorActionPreference = 'Continue'
         $out = & $curl -L --fail --silent --show-error --retry 3 -o $partiel $p.url 2>&1 | Out-String
-        if ($LASTEXITCODE -ne 0) {
+        $code = $LASTEXITCODE
+        $ErrorActionPreference = 'Stop'
+        if ($code -ne 0) {
             Remove-Item -LiteralPath $partiel -Force -ErrorAction SilentlyContinue
-            throw "téléchargement impossible (curl $LASTEXITCODE) : $(Get-Fin $out 200)"
+            throw "téléchargement impossible (curl $code) : $(Get-Fin $out 200)"
         }
     } else {
         Invoke-WebRequest -Uri $p.url -OutFile $partiel -UseBasicParsing
@@ -410,6 +420,199 @@ function Save-Fichier($p) {
     $result.ok = $true
     $result.taille = $taille
     $result.detail = "posé dans $cible"
+}
+
+# --- Nettoyage (lot 6) -----------------------------------------------------------
+
+$fichierNettoyage = Join-Path $base 'nettoyage.json'
+# Performances optimales (copiée à l'application), sinon Performances élevées.
+$planOptimal = 'e9a42b02-d5df-448d-aa00-03f14749eb61'
+$planEleve = '8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c'
+# Ce qui ne sert à rien sur un poste de production : télémétrie, Xbox, cartes,
+# démonstration en magasin, fax, géolocalisation. Rien de ce dont vMix, NDI,
+# Office ou MeshCentral ont besoin (Defender, pare-feu, Windows Update, la
+# recherche, les manettes restent tels quels).
+$servicesNettoyage = @('DiagTrack', 'dmwappushservice', 'MapsBroker', 'RetailDemo', 'XblAuthManager', 'XblGameSave', 'XboxNetApiSvc', 'Fax', 'lfsvc')
+$tachesNettoyage = @(
+    '\Microsoft\Windows\Application Experience\Microsoft Compatibility Appraiser',
+    '\Microsoft\Windows\Application Experience\ProgramDataUpdater',
+    '\Microsoft\Windows\Customer Experience Improvement Program\Consolidator',
+    '\Microsoft\Windows\Customer Experience Improvement Program\UsbCeip',
+    '\Microsoft\Windows\Feedback\Siuf\DmClient',
+    '\Microsoft\Windows\Feedback\Siuf\DmClientOnScenarioDownload',
+    '\Microsoft\Windows\Maps\MapsUpdateTask',
+    '\Microsoft\Windows\Maps\MapsToastTask',
+    '\Microsoft\Windows\DiskDiagnostic\Microsoft-Windows-DiskDiagnosticDataCollector'
+)
+# cle, nom, valeur (DWord)
+$reglagesNettoyage = @(
+    @('HKLM:\SOFTWARE\Policies\Microsoft\Windows\DataCollection', 'AllowTelemetry', 1),
+    @('HKLM:\SOFTWARE\Policies\Microsoft\Windows\GameDVR', 'AllowGameDVR', 0),
+    @('HKLM:\SOFTWARE\Policies\Microsoft\Windows\CloudContent', 'DisableWindowsConsumerFeatures', 1),
+    @('HKLM:\SOFTWARE\Policies\Microsoft\Windows\AdvertisingInfo', 'DisabledByGroupPolicy', 1),
+    @('HKLM:\SOFTWARE\Policies\Microsoft\Windows\Windows Search', 'AllowCortana', 0),
+    @('HKLM:\SOFTWARE\Policies\Microsoft\Dsh', 'AllowNewsAndInterests', 0),
+    # Démarrage rapide coupé : un vrai redémarrage, et le Wake-on-LAN plus fiable.
+    @('HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Power', 'HiberbootEnabled', 0)
+)
+$applicationsNettoyage = @(
+    'Microsoft.BingNews', 'Microsoft.BingWeather', 'Microsoft.BingSearch', 'Microsoft.GamingApp', 'Microsoft.XboxApp',
+    'Microsoft.XboxGamingOverlay', 'Microsoft.XboxGameOverlay', 'Microsoft.XboxSpeechToTextOverlay',
+    'Microsoft.MicrosoftSolitaireCollection', 'Microsoft.People', 'Microsoft.WindowsFeedbackHub', 'Microsoft.GetHelp',
+    'Microsoft.Getstarted', 'Microsoft.MicrosoftOfficeHub', 'Microsoft.WindowsMaps', 'Microsoft.Todos',
+    'Microsoft.PowerAutomateDesktop', 'Microsoft.549981C3F5F10', 'Microsoft.MixedReality.Portal', 'Microsoft.SkypeApp',
+    'Clipchamp.Clipchamp', 'MicrosoftCorporationII.MicrosoftFamily', 'king.com.*', 'Disney.*', 'SpotifyAB.SpotifyMusic'
+)
+$cleServices = 'HKLM:\SYSTEM\CurrentControlSet\Services'
+
+function Get-PlanActif {
+    $texte = (& powercfg.exe /getactivescheme) -join ' '
+    $m = [regex]::Match($texte, '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}')
+    if ($m.Success) { return $m.Value.ToLower() }
+    return $null
+}
+
+function Set-PlanProduction($etat) {
+    if (-not $etat.plan) { $etat.plan = [ordered]@{ avant = (Get-PlanActif); cree = $null } }
+    $guid = $etat.plan.cree
+    if (-not $guid) {
+        $texte = (& powercfg.exe /duplicatescheme $planOptimal) -join ' '
+        $m = [regex]::Match($texte, '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}')
+        if ($LASTEXITCODE -eq 0 -and $m.Success) {
+            $guid = $m.Value.ToLower()
+            $etat.plan.cree = $guid
+            & powercfg.exe /changename $guid 'Pointe Noire production' | Out-Null
+        } else {
+            $guid = $planEleve
+        }
+    }
+    # Pas de mise en veille sélective USB ni d'économie PCI Express : les cartes
+    # de capture, les interfaces audio et les manettes restent alimentées.
+    & powercfg.exe /setacvalueindex $guid 2a737441-1930-4402-8d77-b2bebba308a3 48e6b7a6-50f5-4782-a5d4-53bb8f07e226 0 | Out-Null
+    & powercfg.exe /setacvalueindex $guid SUB_PCIEXPRESS ASPM 0 | Out-Null
+    & powercfg.exe /setactive $guid | Out-Null
+    if ($LASTEXITCODE -ne 0) { return 'plan d''alimentation inchangé' }
+    if ($guid -eq $planEleve) { return 'plan Performances élevées' }
+    return 'plan Performances optimales'
+}
+
+function Enable-Nettoyage([bool]$Applications) {
+    if (-not (Test-Path $base)) { New-Item -ItemType Directory -Path $base -Force | Out-Null }
+    $etat = [ordered]@{ depuis = (Get-Date).ToString('o'); plan = $null; services = [ordered]@{}; taches = [ordered]@{}; reglages = [ordered]@{}; applications = @() }
+    if (Test-Path $fichierNettoyage) {
+        # Appliqué une seconde fois : l'état d'origine reste celui de la première.
+        $lu = Get-Content -Raw -Path $fichierNettoyage | ConvertFrom-Json
+        $etat.depuis = $lu.depuis
+        if ($lu.plan) { $etat.plan = [ordered]@{ avant = $lu.plan.avant; cree = $lu.plan.cree } }
+        foreach ($x in @('services', 'taches', 'reglages')) {
+            if ($lu.$x) { foreach ($q in $lu.$x.PSObject.Properties) { $etat[$x][$q.Name] = $q.Value } }
+        }
+        $etat.applications = @($lu.applications | Where-Object { $_ })
+    }
+    foreach ($n in $servicesNettoyage) {
+        $cle = Join-Path $cleServices $n
+        if (-not (Test-Path $cle)) { continue }
+        if (-not $etat.services.Contains($n)) {
+            $etat.services[$n] = [ordered]@{ start = (Get-Valeur $cle 'Start'); delai = (Get-Valeur $cle 'DelayedAutostart') }
+        }
+    }
+    foreach ($t in $tachesNettoyage) {
+        $i = $t.LastIndexOf('\')
+        $tache = Get-ScheduledTask -TaskPath $t.Substring(0, $i + 1) -TaskName $t.Substring($i + 1) -ErrorAction SilentlyContinue
+        if (-not $tache) { continue }
+        if (-not $etat.taches.Contains($t)) { $etat.taches[$t] = ($tache.State -ne 'Disabled') }
+    }
+    foreach ($r in $reglagesNettoyage) {
+        $k = $r[0] + '|' + $r[1]
+        if (-not $etat.reglages.Contains($k)) { $etat.reglages[$k] = Get-Valeur $r[0] $r[1] }
+    }
+    # La sauvegarde d'abord, plan compris : sans elle, pas de retour possible.
+    if (-not $etat.plan) { $etat.plan = [ordered]@{ avant = (Get-PlanActif); cree = $null } }
+    Write-Utf8 $fichierNettoyage ($etat | ConvertTo-Json -Depth 6)
+
+    $plan = Set-PlanProduction $etat
+    $services = 0
+    foreach ($n in @($etat.services.Keys)) {
+        Set-Valeur (Join-Path $cleServices $n) 'Start' 4 'DWord'
+        Stop-Service -Name $n -Force -ErrorAction SilentlyContinue
+        $services++
+    }
+    $taches = 0
+    foreach ($t in @($etat.taches.Keys)) {
+        $i = $t.LastIndexOf('\')
+        Disable-ScheduledTask -TaskPath $t.Substring(0, $i + 1) -TaskName $t.Substring($i + 1) -ErrorAction SilentlyContinue | Out-Null
+        $taches++
+    }
+    foreach ($r in $reglagesNettoyage) { Set-Valeur $r[0] $r[1] $r[2] 'DWord' }
+    $retirees = @()
+    if ($Applications) {
+        foreach ($a in $applicationsNettoyage) {
+            foreach ($pkg in @(Get-AppxPackage -AllUsers -Name $a -ErrorAction SilentlyContinue)) {
+                try { Remove-AppxPackage -Package $pkg.PackageFullName -AllUsers -ErrorAction Stop; $retirees += $pkg.Name } catch { }
+            }
+            foreach ($prov in @(Get-AppxProvisionedPackage -Online -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -like $a })) {
+                try { Remove-AppxProvisionedPackage -Online -PackageName $prov.PackageName -ErrorAction Stop | Out-Null; $retirees += $prov.DisplayName } catch { }
+            }
+        }
+        $etat.applications = @(@($etat.applications) + $retirees | Where-Object { $_ } | Sort-Object -Unique)
+        Write-Utf8 $fichierNettoyage ($etat | ConvertTo-Json -Depth 6)
+    }
+    $result.ok = $true
+    $result.applications = @($retirees | Sort-Object -Unique)
+    $txt = "profil appliqué : $plan, $services service(s) et $taches tâche(s) coupés, $($reglagesNettoyage.Count) réglages posés"
+    if ($Applications) { $txt += ", $(@($result.applications).Count) application(s) retirée(s)" }
+    $result.detail = $txt + '. Le démarrage rapide est coupé : effet complet au prochain redémarrage'
+}
+
+function Disable-Nettoyage {
+    if (-not (Test-Path $fichierNettoyage)) {
+        $result.ok = $true
+        $result.detail = 'aucun profil de nettoyage sur ce poste'
+        return
+    }
+    $etat = Get-Content -Raw -Path $fichierNettoyage | ConvertFrom-Json
+    $echecs = @()
+    if ($etat.plan -and $etat.plan.avant) {
+        & powercfg.exe /setactive $etat.plan.avant | Out-Null
+        if ($LASTEXITCODE -ne 0) { $echecs += 'plan d''alimentation' }
+        elseif ($etat.plan.cree) { & powercfg.exe /delete $etat.plan.cree | Out-Null }
+    }
+    $services = 0
+    foreach ($q in @($etat.services.PSObject.Properties)) {
+        $cle = Join-Path $cleServices $q.Name
+        if (-not (Test-Path $cle)) { continue }
+        try {
+            Set-Valeur $cle 'Start' $q.Value.start 'DWord'
+            Set-Valeur $cle 'DelayedAutostart' $q.Value.delai 'DWord'
+            if ($q.Value.start -eq 2) { Start-Service -Name $q.Name -ErrorAction SilentlyContinue }
+            $services++
+        } catch { $echecs += "service $($q.Name)" }
+    }
+    $taches = 0
+    foreach ($q in @($etat.taches.PSObject.Properties)) {
+        if (-not $q.Value) { continue }
+        $i = $q.Name.LastIndexOf('\')
+        try {
+            Enable-ScheduledTask -TaskPath $q.Name.Substring(0, $i + 1) -TaskName $q.Name.Substring($i + 1) -ErrorAction Stop | Out-Null
+            $taches++
+        } catch { $echecs += "tâche $($q.Name.Substring($i + 1))" }
+    }
+    foreach ($q in @($etat.reglages.PSObject.Properties)) {
+        $cle, $nom = $q.Name -split '\|', 2
+        try { Set-Valeur $cle $nom $q.Value 'DWord' } catch { $echecs += "réglage $nom" }
+    }
+    $apps = @($etat.applications | Where-Object { $_ })
+    if ($echecs.Count) {
+        # L'état reste : une seconde annulation reprend ce qui a échoué.
+        $result.detail = "annulation partielle, à reprendre : $($echecs -join ', ')"
+        return
+    }
+    Remove-Item -Path $fichierNettoyage -Force
+    $result.ok = $true
+    $result.applications = $apps
+    $txt = "profil annulé (appliqué le $(([datetime]$etat.depuis).ToString('dd/MM HH:mm'))) : plan d'alimentation, $services service(s), $taches tâche(s) et réglages rendus"
+    if ($apps.Count) { $txt += ". Applications retirées, à réinstaller depuis le Microsoft Store si besoin : $($apps -join ', ')" }
+    $result.detail = $txt
 }
 
 # --- Entrée --------------------------------------------------------------------
@@ -451,6 +654,12 @@ try {
         'supervision' { if ($p.actif) { Install-Sonde $p } else { Remove-Sonde } }
         'script' { Invoke-Script $p }
         'fichier' { Save-Fichier $p }
+        'nettoyage' {
+            # Le mode événement garde les réglages de veille du plan actif : on
+            # ne change pas de plan sous lui, ni dans un sens ni dans l'autre.
+            if (Test-Path $fichierEvenement) { $result.detail = 'refusé : le poste est en mode événement'; break }
+            if ($p.actif) { Enable-Nettoyage ([bool]$p.applications) } else { Disable-Nettoyage }
+        }
         default { $result.detail = "opération inconnue : $($p.op)" }
     }
 } catch {
