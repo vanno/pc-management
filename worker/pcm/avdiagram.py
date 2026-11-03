@@ -110,6 +110,11 @@ class AvdClient:
     def remove_probe(self, unit_id: str) -> bool:
         return bool(self._request("DELETE", "/api/v1/postes/sondes", {"unit_id": unit_id}).get("removed"))
 
+    def get_envoi(self, envoi_id: str) -> dict:
+        """Un script approuvé ou un fichier de la bibliothèque d'envois (0075).
+        Le fichier porte une adresse de téléchargement signée."""
+        return self._request("GET", f"/api/v1/postes/envois/{envoi_id}")
+
     def finish_task(self, task_id: str, ok: bool, result: str) -> bool:
         """Rend le résultat d'une tâche. False si AVDiagram ne l'attend plus
         (annulée, ou expirée après 30 minutes)."""

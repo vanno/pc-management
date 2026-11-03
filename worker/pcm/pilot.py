@@ -6,6 +6,9 @@
                     automatique si le poste ne joint plus MeshCentral
     mode_evenement  Windows Update en pause, veille et notifications coupées ;
                     redémarrer, éteindre et installer refusés
+    supervision     pose ou retire la sonde (lot 3)
+    envoi           lance un script approuvé dans AVDiagram ou pose un
+                    fichier de la bibliothèque sur le poste (lot 4)
 
 Tout passe par `agent/pilote.ps1`, envoyé au poste comme l'inventaire
 (`meshctrl runcommand --powershell --reply`, compte SYSTEM), sauf le réveil :
@@ -21,6 +24,7 @@ from __future__ import annotations
 import base64
 import binascii
 import gzip
+import hashlib
 import ipaddress
 import json
 import re
@@ -47,6 +51,12 @@ NETWORK_READ_GAP = 20
 CALL_TIMEOUT = 120
 READ_TIMEOUT = 45
 EVENT_DAYS = 7
+# La ligne de commande que l'agent MeshCentral accepte, avec de la marge.
+MAX_COMMAND = 23_000
+SCRIPT_DELAY = 300
+UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.I)
+# Un téléchargement de 5 Go en 1 Mo/s laisse 10 minutes de base.
+DOWNLOAD_RATE = 1_000_000
 
 
 class PilotError(ValueError):
@@ -208,6 +218,66 @@ def supervision(mesh: MeshCtrl, device_id: str, unit_id: str, params: dict, avd,
         return False, f"AVDiagram : {exc}"
     detail = reply.get("detail") or ""
     return bool(reply.get("ok")), detail[:1].upper() + detail[1:]
+
+
+def pack(data: bytes) -> str:
+    return base64.b64encode(gzip.compress(data, mtime=0)).decode("ascii")
+
+
+def send(mesh: MeshCtrl, device_id: str, item: dict, params: dict, new_nonce: Callable[[], str], script: str | None = None) -> tuple[bool, str]:
+    """Un élément de la bibliothèque d'envois (GET /api/v1/postes/envois/<id>)."""
+    kind = item.get("kind")
+    name = str(item.get("name") or "?")
+    if kind == "script":
+        content = item.get("content")
+        if not isinstance(content, str) or not content.strip():
+            return False, f"Script {name} vide."
+        if item.get("approved") is not True:
+            return False, f"Le script {name} n'est pas approuvé : rien n'est lancé."
+        raw = content.encode("utf-8")
+        digest = hashlib.sha256(raw).hexdigest()
+        if digest != item.get("sha256") or (params.get("empreinte") and digest != params.get("empreinte")):
+            return False, f"Le script {name} a changé depuis la demande : rien n'est lancé."
+        request = {"op": "script", "empreinte": digest, "script": pack(raw), "delai": SCRIPT_DELAY}
+        nonce = new_nonce()
+        command = build_command(request, nonce, script)
+        if len(command) > MAX_COMMAND:
+            return False, f"Le script {name} est trop long pour passer par MeshCentral ({len(command)} caractères une fois emballé)."
+        try:
+            reply = parse_output(mesh.run_powershell(device_id, command, timeout=SCRIPT_DELAY + 60), nonce)
+        except (MeshError, PilotError) as exc:
+            return False, str(exc)
+        detail = str(reply.get("detail") or "")
+        parts = [f"{name} : {detail}"]
+        if reply.get("sortie"):
+            parts.append(f"Sortie : {reply['sortie']}")
+        if reply.get("erreurs"):
+            parts.append(f"Erreurs : {reply['erreurs']}")
+        return bool(reply.get("ok")), "\n".join(parts)
+    if kind == "file":
+        url = item.get("url")
+        if not isinstance(url, str) or not url.startswith("https://"):
+            return False, f"Le fichier {name} n'a pas d'adresse de téléchargement (stockage absent ?)."
+        size = item.get("size") if isinstance(item.get("size"), int) else 0
+        request = {"op": "fichier", "url": url, "nom": item.get("file"), "destination": item.get("destination"), "taille": size or None}
+        try:
+            reply = call(mesh, device_id, request, new_nonce, timeout=600 + size // DOWNLOAD_RATE, script=script)
+        except (MeshError, PilotError) as exc:
+            return False, str(exc)
+        detail = str(reply.get("detail") or "")
+        return bool(reply.get("ok")), f"{name} : {detail}"
+    return False, f"Élément d'envoi inconnu : {kind!r}"
+
+
+def envoi(mesh: MeshCtrl, device_id: str, params: dict, avd, new_nonce: Callable[[], str], script: str | None = None) -> tuple[bool, str]:
+    envoi_id = params.get("envoi_id")
+    if not isinstance(envoi_id, str) or not UUID_RE.match(envoi_id):
+        return False, "Paramètre `envoi_id` manquant."
+    try:
+        item = avd.get_envoi(envoi_id)
+    except Exception as exc:  # AvdError
+        return False, f"AVDiagram : {exc}"
+    return send(mesh, device_id, item, params, new_nonce, script=script)
 
 
 def network(

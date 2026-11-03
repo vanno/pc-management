@@ -172,6 +172,83 @@ class SupervisionTests(unittest.TestCase):
         self.assertFalse(pilot.supervision(mesh, "n", "", {"actif": True}, avd, nonces())[0])
 
 
+ENVOI_ID = "0f1e2d3c-4b5a-4968-8776-655443322110"
+SCRIPT = "Write-Output 'Bonjour é'\nRestart-Service -Name Spooler\n"
+
+
+class EnvoiAvd:
+    def __init__(self, item):
+        self.item = item
+        self.asked = []
+
+    def get_envoi(self, envoi_id):
+        self.asked.append(envoi_id)
+        if isinstance(self.item, Exception):
+            raise self.item
+        return self.item
+
+
+def script_item(**over):
+    import hashlib
+
+    item = {"kind": "script", "name": "Relance spouleur", "content": SCRIPT, "sha256": hashlib.sha256(SCRIPT.encode("utf-8")).hexdigest(), "approved": True}
+    item.update(over)
+    return item
+
+
+class EnvoiTests(unittest.TestCase):
+    def test_approved_script_runs_with_its_digest(self):
+        item = script_item()
+        mesh = FakeMesh({"script": [{"ok": True, "detail": "script terminé (code 0)", "code": 0, "sortie": "Bonjour é"}]})
+        ok, text = pilot.envoi(mesh, "n", {"envoi_id": ENVOI_ID, "empreinte": item["sha256"]}, EnvoiAvd(item), nonces())
+        self.assertTrue(ok)
+        self.assertEqual(text, "Relance spouleur : script terminé (code 0)\nSortie : Bonjour é")
+        request, timeout = mesh.calls[0]
+        self.assertEqual(request["empreinte"], item["sha256"])
+        self.assertEqual(gzip.decompress(base64.b64decode(request["script"])).decode("utf-8"), SCRIPT)
+        self.assertEqual(timeout, pilot.SCRIPT_DELAY + 60)
+
+    def test_unapproved_or_changed_script_never_reaches_device(self):
+        mesh = FakeMesh({})
+        self.assertFalse(pilot.envoi(mesh, "n", {"envoi_id": ENVOI_ID}, EnvoiAvd(script_item(approved=False)), nonces())[0])
+        self.assertFalse(pilot.envoi(mesh, "n", {"envoi_id": ENVOI_ID}, EnvoiAvd(script_item(sha256="0" * 64)), nonces())[0])
+        ok, text = pilot.envoi(mesh, "n", {"envoi_id": ENVOI_ID, "empreinte": "1" * 64}, EnvoiAvd(script_item()), nonces())
+        self.assertFalse(ok)
+        self.assertIn("a changé depuis la demande", text)
+        self.assertFalse(pilot.envoi(mesh, "n", {"envoi_id": "../x"}, EnvoiAvd(script_item()), nonces())[0])
+        self.assertEqual(mesh.calls, [])
+
+    def test_too_long_script_is_refused(self):
+        import random
+
+        rng = random.Random(4)
+        content = "".join(rng.choice("abcdefghijklmnopqrstuvwxyz0123456789") for _ in range(30_000))
+        mesh = FakeMesh({})
+        import hashlib
+
+        item = script_item(content=content, sha256=hashlib.sha256(content.encode()).hexdigest())
+        ok, text = pilot.envoi(mesh, "n", {"envoi_id": ENVOI_ID}, EnvoiAvd(item), nonces())
+        self.assertFalse(ok)
+        self.assertIn("trop long", text)
+        self.assertEqual(mesh.calls, [])
+
+    def test_file_is_downloaded_by_the_device(self):
+        item = {"kind": "file", "name": "Fond vMix", "file": "fond.png", "size": 2_000_000, "destination": "C:\\Users\\Public\\Desktop", "url": "https://stockage.example/s/fond.png?token=x"}
+        mesh = FakeMesh({"fichier": [{"ok": True, "detail": "posé dans C:\\Users\\Public\\Desktop\\fond.png", "taille": 2_000_000}]})
+        ok, text = pilot.envoi(mesh, "n", {"envoi_id": ENVOI_ID}, EnvoiAvd(item), nonces())
+        self.assertTrue(ok)
+        self.assertIn("Fond vMix : posé dans", text)
+        request, timeout = mesh.calls[0]
+        self.assertEqual((request["nom"], request["taille"], request["url"]), ("fond.png", 2_000_000, item["url"]))
+        self.assertEqual(timeout, 602)
+        self.assertFalse(pilot.envoi(FakeMesh({}), "n", {"envoi_id": ENVOI_ID}, EnvoiAvd({**item, "url": None}), nonces())[0])
+
+    def test_avd_error_is_reported(self):
+        ok, text = pilot.envoi(FakeMesh({}), "n", {"envoi_id": ENVOI_ID}, EnvoiAvd(RuntimeError("HTTP 404")), nonces())
+        self.assertFalse(ok)
+        self.assertIn("AVDiagram : HTTP 404", text)
+
+
 class PowerTests(unittest.TestCase):
     def test_restart_and_event_refusal(self):
         mesh = FakeMesh({"alimentation": [{"ok": True, "detail": "redémarrage dans 30 secondes"}, {"ok": False, "detail": "refusé : le poste est en mode événement"}]})
