@@ -131,6 +131,7 @@ compte SYSTEM, puis effacé.
 | `detection` | motif du nom dans Programmes et fonctionnalités, ex. `vMix*` |
 | `version` | facultatif. Vide : un logiciel déjà présent est laissé tel quel. Rempli (ex. `29`) : toute autre version est remplacée |
 | `arguments` | arguments de l'installation silencieuse. Un .msi reçoit déjà `/qn /norestart` |
+| `configuration` | facultatif : texte écrit dans configuration.xml sur le poste, `{configuration}` dans `arguments` devient son chemin |
 
 Tester un poste sans refaire winget :
 
@@ -148,10 +149,12 @@ viennent de sources tierces, pas de l'éditeur.
   silencieuse : à vérifier au premier essai.
 - DaVinci Resolve : `/i /q /noreboot` (SilentInstallHQ, version 18).
 - Microsoft 365 : l'outil de déploiement d'Office (setup.exe) avec
-  `/configure https://aka.ms/fhlwingetconfig`, la configuration utilisée par
-  winget : Microsoft 365 Apps for enterprise (O365ProPlusRetail), langue de
-  Windows, sans Skype Entreprise ni OneDrive ancien. Office se télécharge
-  ensuite depuis Microsoft et se met à jour seul. Pour récupérer setup.exe :
+  `/configure {configuration}`. Le champ `configuration` du modèle installe
+  O365BusinessRetail, l'identifiant de Microsoft 365 Business Standard et
+  Business Premium selon Microsoft (« Product IDs supported by the Office
+  Deployment Tool »), en 64 bits, langue de Windows, canal Current, mises à
+  jour automatiques. Office se télécharge depuis Microsoft. Pour récupérer
+  setup.exe :
 
 ```bash
 curl -L -o installeurs/setup.exe https://officecdn.microsoft.com/pr/wsus/setup.exe

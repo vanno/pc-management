@@ -26,7 +26,8 @@
       "fichier": "setup.exe",
       "detection": "Microsoft 365*",
       "version": "",
-      "arguments": "/configure https://aka.ms/fhlwingetconfig"
+      "arguments": "/configure {configuration}",
+      "configuration": "<Configuration><Add OfficeClientEdition=\"64\" Channel=\"Current\"><Product ID=\"O365BusinessRetail\"><Language ID=\"MatchOS\"/><ExcludeApp ID=\"Groove\"/><ExcludeApp ID=\"Lync\"/></Product></Add><Updates Enabled=\"TRUE\"/><RemoveMSI/><Display Level=\"None\" AcceptEULA=\"TRUE\"/></Configuration>"
     }
   ]
 }

@@ -60,6 +60,7 @@ class Installer:
     version: str | None
     args: str
     path: Path
+    configuration: str | None = None
 
     @property
     def package(self) -> Package:
@@ -96,6 +97,7 @@ def load_installers(path: str | Path, folder: str | Path) -> list[Installer]:
             version=str(item.get("version") or "").strip() or None,
             args=str(item.get("arguments") or "").strip(),
             path=d / file,
+            configuration=str(item.get("configuration") or "").strip() or None,
         ))
     return out
 
@@ -178,7 +180,7 @@ def install(mesh, device_id: str, inst: Installer, new_nonce, script: str | None
         nonce = new_nonce()
         reply = parse_output(mesh.run_powershell(
             device_id,
-            build_command({"mode": "install", "file": inst.file, "args": inst.args}, nonce, script),
+            build_command({"mode": "install", "file": inst.file, "args": inst.args, "configuration": inst.configuration}, nonce, script),
             timeout=INSTALL_TIMEOUT,
         ), nonce)
         state, detail = classify_install(found, reply)

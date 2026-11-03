@@ -69,6 +69,13 @@ class InstallersTests(unittest.TestCase):
         names = [i.name for i in ins.load_installers(example, self.dir)]
         self.assertEqual(names, ["vMix", "Blackmagic ATEM Switchers", "DaVinci Resolve", "Microsoft 365"])
 
+    def test_configuration_is_sent_with_the_install(self):
+        mesh = FakeMesh()
+        inst = self.vmix(arguments="/configure {configuration}", configuration="<Configuration/>")
+        ins.install(mesh, "n", inst, nonces(), script="x")
+        sent = mesh.calls[-1][1]
+        self.assertEqual((sent["args"], sent["configuration"]), ("/configure {configuration}", "<Configuration/>"))
+
     def test_missing_list_means_no_installers(self):
         self.assertEqual(ins.load_installers(self.cfg, self.dir), [])
 

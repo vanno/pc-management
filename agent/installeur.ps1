@@ -11,6 +11,8 @@
           match motif du nom affiché dans Programmes et fonctionnalités, ex. vMix*
           file  nom du fichier déposé, ex. vmix29.exe
           args  arguments de l'installation silencieuse
+          configuration  facultatif : texte écrit dans configuration.xml à côté
+                de l'installeur, {configuration} dans args devient son chemin
 
   Sortie : une seule ligne
       PNIN1:<jeton>:<JSON encodé en base64 UTF-8>
@@ -63,12 +65,19 @@ if ($p.mode -eq 'install') {
         Send-Result
         return
     }
+    $config = $null
+    $installArgs = [string]$p.args
+    if ($p.configuration) {
+        $config = Join-Path $dir 'configuration.xml'
+        [IO.File]::WriteAllText($config, [string]$p.configuration, (New-Object Text.UTF8Encoding($false)))
+        $installArgs = $installArgs.Replace('{configuration}', "`"$config`"")
+    }
     try {
         if ($file -like '*.msi') {
-            $argList = "/i `"$file`" /qn /norestart " + $p.args
+            $argList = "/i `"$file`" /qn /norestart " + $installArgs
             $proc = Start-Process -FilePath "$env:SystemRoot\System32\msiexec.exe" -ArgumentList $argList -Wait -PassThru -WindowStyle Hidden
-        } elseif ($p.args) {
-            $proc = Start-Process -FilePath $file -ArgumentList $p.args -Wait -PassThru -WindowStyle Hidden
+        } elseif ($installArgs) {
+            $proc = Start-Process -FilePath $file -ArgumentList $installArgs -Wait -PassThru -WindowStyle Hidden
         } else {
             $proc = Start-Process -FilePath $file -Wait -PassThru -WindowStyle Hidden
         }
@@ -79,6 +88,7 @@ if ($p.mode -eq 'install') {
         $result.output = [string]$_.Exception.Message
     }
     Remove-Item -LiteralPath $file -Force
+    if ($config) { Remove-Item -LiteralPath $config -Force }
     Send-Result
     return
 }
