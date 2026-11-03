@@ -1,0 +1,5 @@
+.env
+data/
+**/@eaDir
+**/__pycache__
+.git
