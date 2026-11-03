@@ -23,6 +23,7 @@ class FakeMesh:
     def __init__(self, found=False, version=None, free=10**12, code=0, upload_error=None):
         self.found, self.version, self.free, self.code = found, version, free, code
         self.upload_error = upload_error
+        self.download_code, self.download_size = 0, 1000
         self.calls = []
 
     def run_powershell(self, device_id, command, timeout=None):
@@ -31,6 +32,8 @@ class FakeMesh:
         self.calls.append((p["mode"], p, timeout))
         if p["mode"] == "check":
             return reply(nonce, found=self.found, name="vMix 29", version=self.version, free=self.free)
+        if p["mode"] == "download":
+            return reply(nonce, code=self.download_code, size=self.download_size, output="curl: (22) 403")
         return reply(nonce, code=self.code, output="")
 
     def upload(self, device_id, local_path, remote_dir, timeout=None):
@@ -75,6 +78,33 @@ class InstallersTests(unittest.TestCase):
         ins.install(mesh, "n", inst, nonces(), script="x")
         sent = mesh.calls[-1][1]
         self.assertEqual((sent["args"], sent["configuration"]), ("/configure {configuration}", "<Configuration/>"))
+
+    def catalogued(self, **kw):
+        e = {"name": "vMix", "file": "vmix29.exe", "size": 1000, "detection": "vMix*", "url": "https://s/signe", "arguments": "/VERYSILENT"}
+        e.update(kw)
+        return ins.from_catalogue([e])[0]
+
+    def test_catalogue_installer_is_downloaded_by_the_device(self):
+        mesh = FakeMesh()
+        o = ins.install(mesh, "n", self.catalogued(), nonces(), script="x")
+        self.assertEqual(o.state, "installed")
+        self.assertEqual([c[0] for c in mesh.calls], ["check", "download", "install"])
+        self.assertEqual(mesh.calls[1][1]["url"], "https://s/signe")
+
+    def test_catalogue_download_failure_or_truncation_stops_before_install(self):
+        mesh = FakeMesh()
+        mesh.download_code = 22
+        o = ins.install(mesh, "n", self.catalogued(), nonces(), script="x")
+        self.assertIn("téléchargement impossible (code 22) : curl: (22) 403", o.detail)
+        mesh = FakeMesh()
+        mesh.download_size = 10
+        o = ins.install(mesh, "n", self.catalogued(), nonces(), script="x")
+        self.assertIn("téléchargement incomplet", o.detail)
+        self.assertEqual([c[0] for c in mesh.calls], ["check", "download"])
+
+    def test_catalogue_entry_without_url_is_refused(self):
+        with self.assertRaises(ins.InstallerError):
+            self.catalogued(url=None)
 
     def test_missing_list_means_no_installers(self):
         self.assertEqual(ins.load_installers(self.cfg, self.dir), [])

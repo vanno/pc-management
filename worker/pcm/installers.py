@@ -6,8 +6,10 @@ Pour chaque installeur de `config/installeurs.json` (modèle :
 
 1. `agent/installeur.ps1` en mode check : le logiciel est-il là, en quelle
    version, et reste-t-il assez de place sur le disque ;
-2. s'il manque ou n'a pas la version voulue, `meshctrl upload` envoie le
-   fichier au poste par MeshCentral (dans C:\\ProgramData\\PointeNoire\\installeurs) ;
+2. s'il manque ou n'a pas la version voulue, le fichier arrive sur le poste
+   (dans C:\\ProgramData\\PointeNoire\\installeurs) : téléchargé par le poste
+   lui-même (curl.exe) depuis l'adresse signée du catalogue d'AVDiagram, ou,
+   pour un fichier du NAS, envoyé par `meshctrl upload` ;
 3. le même script en mode install le lance en silencieux, rend son code de
    sortie et efface le fichier.
 
@@ -59,8 +61,11 @@ class Installer:
     match: str
     version: str | None
     args: str
-    path: Path
+    path: Path | None
     configuration: str | None = None
+    # Du catalogue d'AVDiagram : le poste télécharge le fichier lui-même.
+    url: str | None = None
+    size: int | None = None
 
     @property
     def package(self) -> Package:
@@ -98,6 +103,29 @@ def load_installers(path: str | Path, folder: str | Path) -> list[Installer]:
             args=str(item.get("arguments") or "").strip(),
             path=d / file,
             configuration=str(item.get("configuration") or "").strip() or None,
+        ))
+    return out
+
+
+def from_catalogue(entries: list[dict]) -> list[Installer]:
+    """Les installeurs du catalogue d'AVDiagram (`GET /api/v1/postes/logiciels`)."""
+    out = []
+    for e in entries:
+        file = str(e.get("file") or "")
+        name = str(e.get("name") or file)
+        if not FILE_RE.match(file) or not e.get("url") or not MATCH_RE.match(str(e.get("detection") or "")):
+            raise InstallerError(f"Installeur du catalogue illisible : {name!r}")
+        size = e.get("size")
+        out.append(Installer(
+            name=name,
+            file=file,
+            match=str(e["detection"]),
+            version=(str(e.get("version") or "").strip() or None),
+            args=str(e.get("arguments") or "").strip(),
+            path=None,
+            configuration=(str(e.get("configuration") or "").strip() or None),
+            url=str(e["url"]),
+            size=size if isinstance(size, int) and size >= 0 else None,
         ))
     return out
 
@@ -160,9 +188,12 @@ def install(mesh, device_id: str, inst: Installer, new_nonce, script: str | None
 
     pkg = inst.package
     try:
-        if not inst.path.is_file():
+        if inst.url:
+            size = inst.size or 0
+        elif inst.path is None or not inst.path.is_file():
             return Outcome(pkg, "failed", f"fichier {inst.file} absent du dossier installeurs du NAS")
-        size = inst.path.stat().st_size
+        else:
+            size = inst.path.stat().st_size
 
         nonce = new_nonce()
         check = parse_output(mesh.run_powershell(
@@ -175,7 +206,20 @@ def install(mesh, device_id: str, inst: Installer, new_nonce, script: str | None
         if isinstance(free, int) and free < size * SPACE_FACTOR:
             return Outcome(pkg, "failed", f"place insuffisante sur le disque ({free // 10**9} Go libres)")
 
-        mesh.upload(device_id, str(inst.path), REMOTE_DIR, timeout=upload_timeout(size))
+        if inst.url:
+            nonce = new_nonce()
+            got = parse_output(mesh.run_powershell(
+                device_id,
+                build_command({"mode": "download", "file": inst.file, "url": inst.url}, nonce, script),
+                timeout=upload_timeout(size),
+            ), nonce)
+            if got.get("code") != 0:
+                tail = str(got.get("output") or "")[:200]
+                return Outcome(pkg, "failed", f"téléchargement impossible (code {got.get('code')})" + (f" : {tail}" if tail else ""))
+            if inst.size is not None and got.get("size") != inst.size:
+                return Outcome(pkg, "failed", f"téléchargement incomplet ({got.get('size')} octets sur {inst.size})")
+        else:
+            mesh.upload(device_id, str(inst.path), REMOTE_DIR, timeout=upload_timeout(size))
 
         nonce = new_nonce()
         reply = parse_output(mesh.run_powershell(

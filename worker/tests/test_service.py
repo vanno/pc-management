@@ -38,7 +38,11 @@ class FakeMesh:
             nonce = command.split("$env:PNIN_NONCE='", 1)[1].split("'", 1)[0]
             mode = params_of(command)["mode"]
             self.packages.append((mode, None))
-            return pnin_reply(nonce, found=False, free=10**12) if mode == "check" else pnin_reply(nonce, code=3010)
+            if mode == "check":
+                return pnin_reply(nonce, found=False, free=10**12)
+            if mode == "download":
+                return pnin_reply(nonce, code=0, size=1234, output="")
+            return pnin_reply(nonce, code=3010)
         if "$env:PNWG_NONCE='" in command:
             nonce = command.split("$env:PNWG_NONCE='", 1)[1].split("'", 1)[0]
             pkg = command.split("$env:PNWG_ID='", 1)[1].split("'", 1)[0]
@@ -59,6 +63,10 @@ class FakeAvd:
         self.finished = []
         self.inventories = []
         self.updates = []
+        self.catalogue = None
+
+    def software(self):
+        return self.catalogue
 
     def heartbeat(self, source, devices, limit):
         self.heartbeats.append({"source": source, "devices": devices, "limit": limit})
@@ -150,6 +158,27 @@ class ServiceTests(unittest.TestCase):
         (_, ok, result), = avd.finished
         self.assertTrue(ok)
         self.assertIn("1 logiciel : 1 redémarrage demandé", result)
+
+    def test_avdiagram_catalogue_replaces_the_nas_profile(self):
+        avd = FakeAvd([task(action="logiciels")])
+        avd.catalogue = [
+            {"kind": "winget", "name": "OBS", "id": "OBSProject.OBSStudio"},
+            {"kind": "installer", "name": "vMix", "file": "vmix29.exe", "size": 1234, "detection": "vMix*",
+             "version": None, "arguments": "/VERYSILENT", "configuration": None, "url": "https://stockage/signe"},
+        ]
+        mesh = FakeMesh([PN01])
+        self.service(mesh, avd, profile_path=self.profile(["VideoLAN.VLC"])).tick()
+        self.assertEqual([p[0] for p in mesh.packages], ["OBSProject.OBSStudio", "check", "download", "install"])
+        (_, ok, result), = avd.finished
+        self.assertTrue(ok)
+        self.assertIn("Redémarrage demandé : vMix", result)
+
+    def test_empty_catalogue_keeps_the_nas_profile(self):
+        avd = FakeAvd([task(action="logiciels")])
+        avd.catalogue = []
+        mesh = FakeMesh([PN01])
+        self.service(mesh, avd, profile_path=self.profile(["VideoLAN.VLC"])).tick()
+        self.assertEqual([p[0] for p in mesh.packages], ["VideoLAN.VLC"])
 
     def test_software_task_without_profile_fails_clearly(self):
         avd = FakeAvd([task(action="logiciels")])
