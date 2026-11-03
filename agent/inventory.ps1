@@ -5,7 +5,10 @@
   le script ne modifie rien sur le poste.
 
   Sortie : une seule ligne
-      PNINV1:<JSON encodé en base64 UTF-8>
+      PNINV1:<jeton>:<JSON encodé en base64 UTF-8>
+  Le jeton (variable PNINV_NONCE posée par le worker) est propre à chaque
+  poste et à chaque passage : le worker vérifie que la réponse reçue est bien
+  celle du poste interrogé.
   Le base64 protège les accents des noms de logiciels pendant le transit par
   l'agent, et le préfixe permet au worker de retrouver la charge utile au
   milieu d'éventuels messages parasites.
@@ -182,4 +185,4 @@ $result = [ordered]@{
 }
 
 $json = $result | ConvertTo-Json -Depth 6 -Compress
-'PNINV1:' + [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($json))
+'PNINV1:' + $env:PNINV_NONCE + ':' + [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($json))

@@ -10,9 +10,9 @@ from pcm.meshctrl import parse_device
 FIXTURE = json.loads((Path(__file__).parent / "fixtures" / "pn01.json").read_text(encoding="utf-8"))
 
 
-def agent_output(data: dict, noise: str = "") -> str:
+def agent_output(data: dict, noise: str = "", nonce: str = "") -> str:
     payload = base64.b64encode(json.dumps(data, ensure_ascii=False).encode("utf-8")).decode()
-    return f"{noise}\r\nPNINV1:{payload}\r\n"
+    return f"{noise}\r\nPNINV1:{nonce}:{payload}\r\n"
 
 
 class ParseTests(unittest.TestCase):
@@ -25,6 +25,13 @@ class ParseTests(unittest.TestCase):
     def test_accents_survive(self):
         data = dict(FIXTURE, software=[{"name": "Logiciel édité à Paris", "version": "1"}])
         self.assertEqual(inv.parse_output(agent_output(data))["software"][0]["name"], "Logiciel édité à Paris")
+
+    def test_nonce_checked(self):
+        self.assertEqual(inv.parse_output(agent_output(FIXTURE, nonce="ab12"), "ab12")["system"]["hostname"], "PN01")
+
+    def test_other_command_reply_rejected(self):
+        with self.assertRaisesRegex(inv.InventoryError, "autre commande"):
+            inv.parse_output(agent_output(FIXTURE, nonce="ab12"), "cd34")
 
     def test_missing_marker(self):
         with self.assertRaises(inv.InventoryError):
@@ -98,10 +105,15 @@ class PlanUpdateTests(unittest.TestCase):
 
 class CommandTests(unittest.TestCase):
     def test_real_script_fits_command_line(self):
-        command = inv.build_command()
+        command = inv.build_command(nonce="0123456789abcdef")
         self.assertLess(len(command), inv.MAX_COMMAND_LENGTH)
-        encoded = command.split("'")[1]
-        self.assertIn("PNINV1:", base64.b64decode(encoded).decode("utf-8"))
+        self.assertTrue(command.startswith("$env:PNINV_NONCE='0123456789abcdef';"))
+        encoded = command.split("'")[3]
+        self.assertIn("$env:PNINV_NONCE", base64.b64decode(encoded).decode("utf-8"))
+
+    def test_nonce_must_be_hex(self):
+        with self.assertRaises(inv.InventoryError):
+            inv.build_command(nonce="x';Remove-Item")
 
 
 class DeviceTests(unittest.TestCase):

@@ -28,9 +28,11 @@ def load_mapping(path: str | None) -> dict[str, str]:
     return json.loads(Path(path).read_text(encoding="utf-8"))
 
 
-def collect(mesh: MeshCtrl, device: Device, command: str) -> tuple[Device, dict | None, str | None]:
+def collect(mesh: MeshCtrl, device: Device, script: str | None) -> tuple[Device, dict | None, str | None]:
+    nonce = inv.new_nonce()
     try:
-        return device, inv.parse_output(mesh.run_powershell(device.id, command)), None
+        output = mesh.run_powershell(device.id, inv.build_command(script, nonce))
+        return device, inv.parse_output(output, nonce), None
     except (MeshError, inv.InventoryError) as exc:
         return device, None, str(exc)
 
@@ -45,7 +47,8 @@ def cmd_devices(args, mesh: MeshCtrl) -> int:
 def cmd_inventory(args, mesh: MeshCtrl) -> int:
     mapping = load_mapping(args.mapping)
     script_path = os.environ.get("PCM_AGENT_SCRIPT")
-    command = inv.build_command(Path(script_path).read_text(encoding="utf-8") if script_path else None)
+    script = Path(script_path).read_text(encoding="utf-8") if script_path else None
+    inv.build_command(script)  # refuse tout de suite un script trop long
 
     devices = [d for d in mesh.list_devices(args.group) if d.is_windows]
     if args.only:
@@ -67,7 +70,7 @@ def cmd_inventory(args, mesh: MeshCtrl) -> int:
 
     store = Store(args.db)
     with ThreadPoolExecutor(max_workers=args.concurrency) as pool:
-        futures = [pool.submit(collect, mesh, d, command) for d in online]
+        futures = [pool.submit(collect, mesh, d, script) for d in online]
         for future in as_completed(futures):
             device, data, error = future.result()
             if error:
@@ -75,6 +78,9 @@ def cmd_inventory(args, mesh: MeshCtrl) -> int:
                 continue
 
             tag = inv.asset_tag_for(device.name, mapping)
+            hostname = (data.get("system") or {}).get("hostname") or ""
+            if hostname.upper() != device.name.upper() and inv.asset_tag_for(hostname, mapping) != tag:
+                report["alertes"].append(f"{tag} : nom Windows {hostname} différent du nom MeshCentral {device.name}")
             previous = store.latest(tag)
             store.save(tag, device.id, data)
             summ = inv.summary(data)
@@ -118,7 +124,11 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--push", action="store_true", help="Écrire les fiches AVDiagram")
     p.add_argument("--check-avd", action="store_true", help="Comparer aux fiches AVDiagram sans rien écrire")
     p.add_argument("--push-ip", action="store_true", help="Écrire aussi l'adresse IP (changeante en DHCP)")
-    p.add_argument("--concurrency", type=int, default=4)
+    # meshctrl 1.2.5 répond à toutes ses commandes sous le même identifiant :
+    # deux runcommand simultanés du même compte peuvent recevoir la réponse
+    # l'un de l'autre. Le jeton détecte l'échange, mais un poste à la fois
+    # l'évite. Ne monter qu'avec une version de meshctrl qui corrige ce point.
+    p.add_argument("--concurrency", type=int, default=1)
     p.add_argument("--db", default=os.environ.get("PCM_DB", "data/pcm.sqlite"))
     p.add_argument("--mapping", default=os.environ.get("PCM_MAPPING", "config/mapping.json"))
     args = parser.parse_args(argv)
