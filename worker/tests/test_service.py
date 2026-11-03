@@ -10,7 +10,9 @@ from pcm.meshctrl import Device, MeshError
 from pcm.service import Service, serve
 from pcm.store import Store
 
+from pcm import software as sw
 from test_inventory import FIXTURE, agent_output
+from test_software import winget_output
 
 
 class FakeMesh:
@@ -18,14 +20,22 @@ class FakeMesh:
         self.devices = devices
         self.fail = fail
         self.commands = []
+        self.packages = []
+        self.winget_codes = {}
 
     def list_devices(self, group=None):
         if self.fail:
             raise MeshError(self.fail)
         return self.devices
 
-    def run_powershell(self, device_id, command):
+    def run_powershell(self, device_id, command, timeout=None):
         self.commands.append(device_id)
+        if "$env:PNWG_NONCE='" in command:
+            nonce = command.split("$env:PNWG_NONCE='", 1)[1].split("'", 1)[0]
+            pkg = command.split("$env:PNWG_ID='", 1)[1].split("'", 1)[0]
+            self.packages.append((pkg, timeout))
+            code = self.winget_codes.get(pkg, 0)
+            return winget_output(nonce, id=pkg, step="install", code=code)
         nonce = command.split("$env:PNINV_NONCE='", 1)[1].split("'", 1)[0]
         return agent_output(FIXTURE, nonce=nonce)
 
@@ -82,8 +92,52 @@ class ServiceTests(unittest.TestCase):
         self.store.db.close()
         self.tmp.cleanup()
 
-    def service(self, mesh, avd, mapping=None):
-        return Service(mesh, avd, self.store, mapping or {}, logger=self.logs.append)
+    def service(self, mesh, avd, mapping=None, **kw):
+        return Service(mesh, avd, self.store, mapping or {}, logger=self.logs.append, **kw)
+
+    def profile(self, ids):
+        path = Path(self.tmp.name) / "logiciels.json"
+        path.write_text(json.dumps({"logiciels": [{"id": i, "nom": i.split(".")[-1]} for i in ids]}))
+        return str(path)
+
+    def test_software_task_installs_profile_then_inventories(self):
+        avd = FakeAvd([task(action="logiciels")])
+        mesh = FakeMesh([PN01])
+        mesh.winget_codes = {"Zoom.Zoom": sw.PACKAGE_IN_USE_BY_APPLICATION}
+        svc = self.service(mesh, avd, profile_path=self.profile(["VideoLAN.VLC", "Zoom.Zoom"]))
+        self.assertEqual(svc.tick(), 1)
+        self.assertEqual(mesh.packages, [("VideoLAN.VLC", sw.PACKAGE_TIMEOUT), ("Zoom.Zoom", sw.PACKAGE_TIMEOUT)])
+        self.assertEqual(avd.inventories, ["PN01"])
+        (_, ok, result), = avd.finished
+        self.assertFalse(ok)
+        self.assertIn("2 logiciels : 1 installé, 1 en échec", result)
+        self.assertIn("Zoom (logiciel ouvert", result)
+        self.assertIn("Fiche à jour", result)
+
+    def test_software_task_without_profile_fails_clearly(self):
+        avd = FakeAvd([task(action="logiciels")])
+        mesh = FakeMesh([PN01])
+        self.service(mesh, avd, profile_path=str(Path(self.tmp.name) / "absent.json")).tick()
+        (_, ok, result), = avd.finished
+        self.assertFalse(ok)
+        self.assertIn("Profil de logiciels absent", result)
+        self.assertEqual(mesh.commands, [])
+
+    def test_heartbeat_continues_during_a_long_task(self):
+        avd = FakeAvd([task(action="logiciels")])
+        mesh = FakeMesh([PN01])
+        svc = self.service(mesh, avd, profile_path=self.profile(["VideoLAN.VLC"]), pulse_interval=0.01)
+        original = mesh.run_powershell
+
+        def slow(*a, **kw):
+            threading.Event().wait(0.1)
+            return original(*a, **kw)
+
+        mesh.run_powershell = slow
+        svc.tick()
+        pulses = [b for b in avd.heartbeats if b["limit"] == 0]
+        self.assertGreater(len(pulses), 2)
+        self.assertEqual(pulses[0]["devices"][0]["asset_tag"], "PN01")
 
     def test_heartbeat_reports_windows_devices_with_asset_tags(self):
         avd = FakeAvd()
@@ -117,6 +171,7 @@ class ServiceTests(unittest.TestCase):
             (task("PN02"), "hors ligne"),
             (task("PN99"), "aucun agent nommé PN99"),
             (task(action="debloat"), "Action inconnue"),
+            (task("PN02", action="logiciels"), "hors ligne"),
             (task(tag=None), "n'existe plus"),
         ]
         for t, expected in cases:

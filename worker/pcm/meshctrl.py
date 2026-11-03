@@ -84,9 +84,9 @@ class MeshCtrl:
             raise MeshError(f"meshctrl listdevices : réponse non JSON : {out.strip()[:300]}") from exc
         return [parse_device(n) for n in nodes]
 
-    def run_powershell(self, device_id: str, command: str) -> str:
+    def run_powershell(self, device_id: str, command: str, timeout: int | None = None) -> str:
         """Exécute une commande PowerShell sur le poste et rend sa sortie."""
-        return self._run("runcommand", "--id", device_id, "--powershell", "--reply", "--run", command)
+        return self._run("runcommand", "--id", device_id, "--powershell", "--reply", "--run", command, timeout=timeout)
 
 
 def parse_device(node: dict) -> Device:

@@ -1,0 +1,18 @@
+{
+  "_note": "Profil de logiciels de la page Postes, le même pour tous les postes. Copier en config/logiciels.json. id = identifiant winget (winget search <nom>).",
+  "logiciels": [
+    { "id": "Klocman.BulkCrapUninstaller", "nom": "Bulk Crap Uninstaller" },
+    { "id": "VideoLAN.VLC", "nom": "VLC media player" },
+    { "id": "Zoom.Zoom", "nom": "Zoom" },
+    { "id": "TeamViewer.TeamViewer", "nom": "TeamViewer" },
+    { "id": "Bitfocus.Companion", "nom": "Bitfocus Companion" },
+    { "id": "Microsoft.Sysinternals.RAMMap", "nom": "RAMMap" },
+    { "id": "Ditto.Ditto", "nom": "Ditto" },
+    { "id": "Mozilla.Firefox", "nom": "Mozilla Firefox" },
+    { "id": "Google.Chrome", "nom": "Google Chrome" },
+    { "id": "NDI.NDITools", "nom": "NDI Tools" },
+    { "id": "LocalSend.LocalSend", "nom": "LocalSend" },
+    { "id": "Adobe.CreativeCloud", "nom": "Adobe Creative Cloud" },
+    { "id": "Microsoft.Office", "nom": "Microsoft 365 Apps" }
+  ]
+}

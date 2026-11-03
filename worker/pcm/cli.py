@@ -4,6 +4,7 @@
     pcm inventory [--only PN01,PN02]  inventaire, rapport, historique local
     pcm inventory --push              idem, puis écriture des fiches AVDiagram
                                       (série, version Windows, inventaire détaillé)
+    pcm software --only PN09          installe le profil de logiciels sur ces postes
     pcm serve                         service : exécute les tâches demandées
                                       depuis la page Postes d'AVDiagram
 
@@ -103,6 +104,33 @@ def cmd_inventory(args, mesh: MeshCtrl) -> int:
     return 1 if report["erreurs"] else 0
 
 
+def cmd_software(args, mesh: MeshCtrl) -> int:
+    from . import software as sw
+
+    mapping = load_mapping(args.mapping)
+    packages = sw.load_profile(args.profile)
+    wanted = {t.strip().upper() for t in args.only.split(",") if t.strip()}
+    devices = [d for d in mesh.list_devices(args.group) if d.is_windows and inv.asset_tag_for(d.name, mapping).upper() in wanted]
+    failed = False
+    for d in devices:
+        if not d.online:
+            print(f"{d.name} : hors ligne")
+            failed = True
+            continue
+        outcomes = []
+        for p in packages:
+            o = sw.install(mesh, d.id, p, inv.new_nonce())
+            print(f"{d.name} {p.id} : {sw.LABELS[o.state]}{' : ' + o.detail if o.detail else ''}", flush=True)
+            outcomes.append(o)
+        print(f"{d.name} : {sw.summary(outcomes)}")
+        failed = failed or not all(o.ok for o in outcomes)
+    missing = wanted - {inv.asset_tag_for(d.name, mapping).upper() for d in devices}
+    for tag in sorted(missing):
+        print(f"{tag} : aucun agent MeshCentral à ce nom")
+        failed = True
+    return 1 if failed else 0
+
+
 def avd_client() -> AvdClient:
     missing = [k for k in ("AVD_URL", "AVD_TOKEN") if not os.environ.get(k)]
     if missing:
@@ -146,6 +174,10 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--concurrency", type=int, default=1)
     p.add_argument("--db", default=os.environ.get("PCM_DB", "data/pcm.sqlite"))
     p.add_argument("--mapping", default=os.environ.get("PCM_MAPPING", "config/mapping.json"))
+    w = sub.add_parser("software", help="Installer le profil de logiciels sur des postes (winget)")
+    w.add_argument("--only", required=True, help="Références de parc séparées par des virgules, ex. PN09")
+    w.add_argument("--profile", default=os.environ.get("PCM_SOFTWARE", "config/logiciels.json"))
+    w.add_argument("--mapping", default=os.environ.get("PCM_MAPPING", "config/mapping.json"))
     s = sub.add_parser("serve", help="Service : battement vers AVDiagram et tâches de la page Postes")
     s.add_argument("--interval", type=float, default=float(os.environ.get("PCM_INTERVAL", "30")), help="Secondes entre deux battements (30 par défaut)")
     s.add_argument("--push-ip", action="store_true", help="Écrire aussi l'adresse IP sur la fiche")
@@ -155,8 +187,8 @@ def main(argv: list[str] | None = None) -> int:
 
     mesh = MeshCtrl()
     try:
-        return {"devices": cmd_devices, "inventory": cmd_inventory, "serve": cmd_serve}[args.cmd](args, mesh)
-    except (MeshError, AvdError) as exc:
+        return {"devices": cmd_devices, "inventory": cmd_inventory, "serve": cmd_serve, "software": cmd_software}[args.cmd](args, mesh)
+    except (MeshError, AvdError, ValueError) as exc:
         print(f"Erreur : {exc}", file=sys.stderr)
         return 2
 

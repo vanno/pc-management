@@ -3,3 +3,4 @@ data/
 config/mapping.json
 __pycache__/
 *.pyc
+config/logiciels.json
