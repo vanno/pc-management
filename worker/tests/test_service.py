@@ -14,6 +14,7 @@ from pcm import software as sw
 from test_inventory import FIXTURE, agent_output
 from test_software import winget_output
 from test_installers import params_of, reply as pnin_reply
+from test_pilot import pilot_params, pnpl_reply
 
 
 class FakeMesh:
@@ -23,6 +24,13 @@ class FakeMesh:
         self.commands = []
         self.packages = []
         self.winget_codes = {}
+        self.event = False
+        self.pilot_ops = []
+        self.woken = []
+
+    def wake(self, device_id):
+        self.woken.append(device_id)
+        return "Used 3 device(s) to send wake packets"
 
     def list_devices(self, group=None):
         if self.fail:
@@ -43,6 +51,12 @@ class FakeMesh:
             if mode == "download":
                 return pnin_reply(nonce, code=0, size=1234, output="")
             return pnin_reply(nonce, code=3010)
+        if "$env:PNPL_NONCE='" in command:
+            nonce, params = pilot_params(command)
+            self.pilot_ops.append(params)
+            if params["op"] == "etat":
+                return pnpl_reply(nonce, op="etat", ok=True, evenement=self.event, depuis="2026-11-03T09:00:00", cartes=[])
+            return pnpl_reply(nonce, op=params["op"], ok=True, detail="mode événement actif")
         if "$env:PNWG_NONCE='" in command:
             nonce = command.split("$env:PNWG_NONCE='", 1)[1].split("'", 1)[0]
             pkg = command.split("$env:PNWG_ID='", 1)[1].split("'", 1)[0]
@@ -206,6 +220,11 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(pulses[0]["devices"][0]["asset_tag"], "PN01")
 
     def test_heartbeat_reports_windows_devices_with_asset_tags(self):
+        import os
+        from unittest import mock
+
+        mock.patch.dict(os.environ, {"MESHCTRL_URL": ""}).start()
+        self.addCleanup(mock.patch.stopall)
         avd = FakeAvd()
         handled = self.service(FakeMesh([PN01, PN02, MAC]), avd, {"PN2": "PN02"}).tick()
         self.assertEqual(handled, 0)
@@ -214,8 +233,8 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(
             beat["devices"],
             [
-                {"name": "PN01", "asset_tag": "PN01", "online": True, "os": "Windows 11 Pro"},
-                {"name": "pn2", "asset_tag": "PN02", "online": False, "os": "Windows 10 Famille"},
+                {"name": "PN01", "asset_tag": "PN01", "online": True, "os": "Windows 11 Pro", "link": None},
+                {"name": "pn2", "asset_tag": "PN02", "online": False, "os": "Windows 10 Famille", "link": None},
             ],
         )
 
@@ -313,6 +332,48 @@ class ServiceTests(unittest.TestCase):
                 signal.signal(sig, handler)
         self.assertEqual([f[0] for f in avd.finished], ["t1", "t2"])
         self.assertNotIn("erreur inattendue", " ".join(self.logs))
+
+    # --- pilotage ---
+
+    def test_heartbeat_carries_meshcentral_link(self):
+        import os
+        from unittest import mock
+
+        avd = FakeAvd()
+        with mock.patch.dict(os.environ, {"MESHCTRL_URL": "wss://meshcentral.pointe-noire.com"}):
+            self.service(FakeMesh([PN01]), avd).tick()
+        self.assertEqual(avd.heartbeats[0]["devices"][0]["link"], "https://meshcentral.pointe-noire.com/?gotonode=pn01&viewmode=10")
+
+    def test_wake_runs_on_offline_device_only(self):
+        mesh = FakeMesh([PN01, PN02])
+        avd = FakeAvd([
+            {**task(tag="PN02", action="alimentation", id="w2"), "params": {"mode": "reveiller"}},
+            {**task(tag="PN01", action="alimentation", id="w1"), "params": {"mode": "reveiller"}},
+        ])
+        svc = self.service(mesh, avd, mapping={"PN2": "PN02"})
+        svc.tick()
+        svc.tick()
+        self.assertEqual(mesh.woken, ["node//pn02"])
+        self.assertTrue(avd.finished[0][1])
+        self.assertIn("Wake-on-LAN envoyé", avd.finished[0][2])
+        self.assertIn("déjà allumé", avd.finished[1][2])
+
+    def test_software_refused_in_event_mode(self):
+        mesh = FakeMesh([PN01])
+        mesh.event = True
+        avd = FakeAvd([task(action="logiciels")])
+        self.service(mesh, avd, profile_path=self.profile(["VideoLAN.VLC"])).tick()
+        (_, ok, result), = avd.finished
+        self.assertFalse(ok)
+        self.assertIn("mode événement", result)
+        self.assertEqual(mesh.packages, [])
+
+    def test_event_mode_task(self):
+        mesh = FakeMesh([PN01])
+        avd = FakeAvd([{**task(action="mode_evenement"), "params": {"actif": True}}])
+        self.service(mesh, avd).tick()
+        self.assertEqual(mesh.pilot_ops[0]["op"], "evenement")
+        self.assertEqual(avd.finished[0][1:], (True, "Mode événement actif"))
 
 
 if __name__ == "__main__":

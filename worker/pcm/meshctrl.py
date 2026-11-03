@@ -100,6 +100,17 @@ class MeshCtrl:
             raise MeshError(f"meshctrl upload : envoi non terminé : {last[:200]}")
 
 
+    def wake(self, device_id: str) -> str:
+        """Wake-on-LAN : le serveur et chaque agent connecté envoient le paquet
+        magique aux adresses MAC connues du poste. Rend la réponse du serveur,
+        « Used N device(s) to send wake packets »."""
+        out = self._run("devicepower", "--wake", "--id", device_id, timeout=60).strip()
+        last = (out.splitlines() or [""])[-1].strip()
+        if not last or last.lower().startswith(("invalid", "no known mac", "no power operation")):
+            raise MeshError(f"meshctrl devicepower : {last or '(sortie vide)'}")
+        return last
+
+
 def parse_device(node: dict) -> Device:
     return Device(
         id=node["_id"],
