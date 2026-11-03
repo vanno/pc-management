@@ -4,3 +4,6 @@ config/mapping.json
 __pycache__/
 *.pyc
 config/logiciels.json
+config/installeurs.json
+installeurs/*
+!installeurs/LISEZMOI.txt

@@ -1,0 +1,25 @@
+{
+  "installeurs": [
+    {
+      "nom": "vMix",
+      "fichier": "vmix29.exe",
+      "detection": "vMix*",
+      "version": "",
+      "arguments": "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART"
+    },
+    {
+      "nom": "Blackmagic ATEM Switchers",
+      "fichier": "Blackmagic ATEM Switchers.msi",
+      "detection": "Blackmagic ATEM Switchers*",
+      "version": "",
+      "arguments": ""
+    },
+    {
+      "nom": "DaVinci Resolve",
+      "fichier": "DaVinci_Resolve_Windows.exe",
+      "detection": "DaVinci Resolve*",
+      "version": "",
+      "arguments": "/i /q /noreboot"
+    }
+  ]
+}
