@@ -19,6 +19,13 @@ synchronisé sur sa fiche du parc AVDiagram.
 4. Avec `--push`, la fiche AVDiagram du poste est complétée par l'outil MCP
    `update_unit` : numéro de série (seulement s'il est vide), version de Windows
    dans le champ firmware, IP avec `--push-ip`.
+5. Toujours avec `--push`, l'inventaire détaillé (machine, processeur, mémoire,
+   cartes graphiques, disques, espace libre, réseau, batterie, logiciels, et
+   ce qui a changé depuis le passage précédent) est posé sur la fiche par
+   l'outil MCP `set_unit_inventory`. Il s'affiche dans la section « Inventaire
+   du poste » de la fiche de l'appareil. Il faut un AVDiagram avec la migration
+   0069 : avant, le rapport le signale en alerte et le reste du passage se fait.
+   `--no-details` désactive cet envoi.
 
 La clé de rapprochement est la référence de parc AVDiagram (PN01, PC-VANNH...).
 Le nom de l'appareil dans MeshCentral doit être cette référence. En attendant

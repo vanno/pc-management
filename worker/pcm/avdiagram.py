@@ -59,21 +59,27 @@ class AvdClient:
             for u in data.get("exemplaires", [])
         }
 
-    def update_unit(self, asset_tag: str, **fields: str | None) -> str:
-        """Appelle l'outil MCP update_unit. Seuls les champs donnés changent."""
-        arguments = {"unit": asset_tag, **{k: v for k, v in fields.items() if v is not None}}
+    def _tool(self, name: str, asset_tag: str, arguments: dict) -> str:
         reply = self._request(
             "POST",
             "/api/mcp",
-            {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "update_unit", "arguments": arguments}},
+            {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": name, "arguments": arguments}},
         )
         if "error" in reply:
-            raise AvdError(f"update_unit {asset_tag} : {reply['error'].get('message')}")
+            raise AvdError(f"{name} {asset_tag} : {reply['error'].get('message')}")
         result = reply.get("result") or {}
         text = " ".join(c.get("text", "") for c in result.get("content", []) if c.get("type") == "text").strip()
         if result.get("isError"):
-            raise AvdError(f"update_unit {asset_tag} : {text}")
+            raise AvdError(f"{name} {asset_tag} : {text}")
         return text
+
+    def update_unit(self, asset_tag: str, **fields: str | None) -> str:
+        """Appelle l'outil MCP update_unit. Seuls les champs donnés changent."""
+        return self._tool("update_unit", asset_tag, {"unit": asset_tag, **{k: v for k, v in fields.items() if v is not None}})
+
+    def set_inventory(self, asset_tag: str, payload: dict) -> str:
+        """Appelle l'outil MCP set_unit_inventory : remplace l'inventaire détaillé de la fiche."""
+        return self._tool("set_unit_inventory", asset_tag, {"unit": asset_tag, **payload})
 
 
 def plan_update(unit: Unit, summary: dict, push_ip: bool = False) -> tuple[dict, list[str]]:

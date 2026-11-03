@@ -125,3 +125,30 @@ class DeviceTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AvdPayloadTests(unittest.TestCase):
+    def test_payload_shape(self):
+        data = inv.parse_output(agent_output(FIXTURE))
+        p = inv.avd_payload(data)
+        self.assertEqual(p["source"], "pc-management")
+        self.assertEqual(p["collected_at"], FIXTURE["collected_at"])
+        h = p["hardware"]
+        self.assertEqual(h["hostname"], "PN01")
+        self.assertEqual(h["os_edition"], "Professional")
+        self.assertEqual(h["ram_gb"], 15.9)
+        self.assertEqual(h["disks"][0], {"model": "SAMSUNG MZVLB1T0", "size_gb": 953.9, "bus": "SCSI"})
+        self.assertEqual(h["network"][0]["ipv4"], ["192.168.1.21"])
+        self.assertEqual(h["battery_health_pct"], 80.0)
+        self.assertEqual(p["software"][0], {"name": "vMix", "version": "27.0.0.49", "publisher": "StudioCoast Pty Ltd"})
+        self.assertNotIn("changes", p)
+
+    def test_changes_only_when_something_changed(self):
+        data = inv.parse_output(agent_output(FIXTURE))
+        self.assertNotIn("changes", inv.avd_payload(data, inv.Diff()))
+        p = inv.avd_payload(data, inv.Diff(added=["OBS 31"]))
+        self.assertEqual(p["changes"], {"added": ["OBS 31"], "removed": [], "updated": [], "hardware": []})
+
+    def test_payload_is_json(self):
+        data = inv.parse_output(agent_output(FIXTURE))
+        json.dumps(inv.avd_payload(data))

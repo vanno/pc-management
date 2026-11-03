@@ -186,3 +186,56 @@ def diff(previous: dict | None, current: dict) -> Diff:
         if before[key] != after[key]:
             result.hardware.append(f"{key}: {before[key]} -> {after[key]}")
     return result
+
+
+def _go(octets) -> float | None:
+    """Des octets en Go (base 1024, comme l'Explorateur), une décimale."""
+    try:
+        return None if octets is None or octets == "" else round(int(octets) / 1024**3, 1)
+    except (TypeError, ValueError):
+        return None
+
+
+def avd_payload(data: dict, changes: "Diff | None" = None, source: str = "pc-management") -> dict:
+    """L'inventaire détaillé au format de l'outil MCP AVDiagram set_unit_inventory."""
+    s = data.get("system") or {}
+    w = data.get("windows") or {}
+    cpu = data["cpus"][0] if data["cpus"] else {}
+    battery = data.get("battery") or {}
+    hardware = {
+        "hostname": s.get("hostname"),
+        "manufacturer": s.get("manufacturer"),
+        "model": s.get("model"),
+        "bios": s.get("bios_version"),
+        "os": windows_label(data),
+        "os_edition": w.get("edition_id"),
+        "installed_at": w.get("install_date"),
+        "last_boot": w.get("last_boot"),
+        "cpu": cpu.get("name"),
+        "cores": cpu.get("cores"),
+        "threads": cpu.get("threads"),
+        "ram_gb": _go(s.get("ram_bytes")),
+        "gpus": [{"name": g["name"], "driver": g.get("driver_version")} for g in data["gpus"] if g.get("name")],
+        "disks": [{"model": d["model"], "size_gb": _go(d.get("size_bytes")), "bus": d.get("interface")} for d in data["disks"] if d.get("model")],
+        "volumes": [
+            {"drive": v["letter"], "size_gb": _go(v.get("size_bytes")), "free_gb": _go(v.get("free_bytes"))}
+            for v in data["volumes"] if v.get("letter")
+        ],
+        "network": [
+            {"name": n["name"], "mac": n.get("mac"), "ipv4": [ip for ip in n["ipv4"] if not ip.startswith("169.254.")]}
+            for n in data["network"] if n.get("name") and n.get("connected")
+        ],
+        "battery_health_pct": battery.get("health_percent"),
+    }
+    payload = {
+        "collected_at": data.get("collected_at"),
+        "source": source,
+        "hardware": {k: v for k, v in hardware.items() if v not in (None, [])},
+        "software": [
+            {"name": sw["name"], "version": sw.get("version"), "publisher": sw.get("publisher")}
+            for sw in data["software"] if sw.get("name")
+        ],
+    }
+    if changes is not None and not changes.empty:
+        payload["changes"] = {"added": changes.added, "removed": changes.removed, "updated": changes.updated, "hardware": changes.hardware}
+    return payload
