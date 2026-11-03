@@ -10,6 +10,8 @@
         reseau           { interface, dhcp, ip, prefixe, passerelle, dns, retour, hote, port, delai }
         reseau_resultat  lit le résultat du dernier changement de réseau
         evenement        { actif, jours }
+        supervision      { actif, url, jeton, script } : pose ou retire la sonde
+                         (script : agent/supervision.ps1, gzip puis base64)
 
   Sortie : une seule ligne
       PNPL1:<jeton>:<JSON encodé en base64 UTF-8>
@@ -278,6 +280,40 @@ function Read-Reseau {
     }
 }
 
+# --- Supervision ------------------------------------------------------------------
+
+$dossierSonde = Join-Path $base 'supervision'
+$tacheSonde = 'PointeNoire-Supervision'
+
+function Install-Sonde($p) {
+    if ($p.url -notmatch '^https://' -or $p.jeton -notmatch '^pns_[A-Za-z0-9_-]{20,100}$') { throw 'adresse ou jeton de sonde illisible' }
+    $m = New-Object IO.MemoryStream(, [Convert]::FromBase64String($p.script))
+    $g = New-Object IO.Compression.GZipStream($m, [IO.Compression.CompressionMode]::Decompress)
+    $script = (New-Object IO.StreamReader($g, [Text.Encoding]::UTF8)).ReadToEnd()
+    if (-not (Test-Path $dossierSonde)) { New-Item -ItemType Directory -Path $dossierSonde -Force | Out-Null }
+    # Le jeton ne se lit que par SYSTEM et les administrateurs (SID : sans dépendre de la langue).
+    & icacls.exe $dossierSonde /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' | Out-Null
+    Write-Utf8 (Join-Path $dossierSonde 'supervision.ps1') $script
+    Write-Utf8 (Join-Path $dossierSonde 'config.json') ([ordered]@{ url = $p.url; jeton = $p.jeton } | ConvertTo-Json)
+    Remove-Item -Path (Join-Path $dossierSonde 'en-attente.json') -ErrorAction SilentlyContinue
+    $fichier = Join-Path $dossierSonde 'supervision.ps1'
+    $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$fichier`""
+    $chaqueMinute = New-ScheduledTaskTrigger -Once -At (Get-Date).AddSeconds(10) -RepetitionInterval (New-TimeSpan -Minutes 1)
+    $demarrage = New-ScheduledTaskTrigger -AtStartup
+    $reglages = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Minutes 2) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
+    $principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
+    Register-ScheduledTask -TaskName $tacheSonde -Action $action -Trigger @($chaqueMinute, $demarrage) -Settings $reglages -Principal $principal -Force | Out-Null
+    $result.ok = $true
+    $result.detail = 'sonde installée : premières mesures dans la minute'
+}
+
+function Remove-Sonde {
+    Unregister-ScheduledTask -TaskName $tacheSonde -Confirm:$false -ErrorAction SilentlyContinue
+    if (Test-Path $dossierSonde) { Remove-Item -Path $dossierSonde -Recurse -Force }
+    $result.ok = $true
+    $result.detail = 'sonde retirée'
+}
+
 # --- Entrée --------------------------------------------------------------------
 
 try {
@@ -314,6 +350,7 @@ try {
                 Enable-Evenement $jours
             } else { Disable-Evenement }
         }
+        'supervision' { if ($p.actif) { Install-Sonde $p } else { Remove-Sonde } }
         default { $result.detail = "opération inconnue : $($p.op)" }
     }
 } catch {

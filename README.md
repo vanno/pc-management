@@ -208,6 +208,23 @@ Le battement envoie aussi, pour chaque poste, le lien vers sa page MeshCentral
 (`https://<hôte>/?gotonode=<id>&viewmode=10`) : la page Postes l'affiche en
 « Ouvrir dans MeshCentral » (bureau à distance, fichiers, terminal).
 
+## Supervision (sonde par poste)
+
+« Superviser » sur la page Postes : le worker demande à AVDiagram un jeton de
+sonde pour ce poste (`POST /api/v1/postes/sondes`, jeton `pns_…` montré une
+fois, AVDiagram n'en garde que l'empreinte), puis `pilote.ps1` installe
+`agent/supervision.ps1` dans `C:\ProgramData\PointeNoire\supervision`
+(dossier lisible par SYSTEM et les administrateurs seuls) et la tâche
+planifiée `PointeNoire-Supervision` (SYSTEM, chaque minute et au démarrage).
+
+Chaque minute, la sonde prend deux mesures à 30 s d'écart : CPU, mémoire,
+disque système, débit reçu et envoyé de chaque carte physique active
+(compteurs d'octets de la carte), latence et perte sur 4 pings vers la
+passerelle et vers 1.1.1.1. Elle les envoie directement à AVDiagram
+(`POST /api/v1/postes/mesures`), sans passer par le NAS ni par MeshCentral.
+Sans réseau, les mesures attendent (10 au plus). Un 401 (sonde retirée ou
+remplacée) désactive la tâche. Le jeton de sonde n'ouvre que cette route.
+
 ## Test sur 2 postes
 
 ```bash

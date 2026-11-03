@@ -137,6 +137,41 @@ class NetworkFlowTests(unittest.TestCase):
         self.assertEqual(mesh.calls, [])
 
 
+class FakeAvd:
+    def __init__(self):
+        self.calls = []
+
+    def create_probe(self, unit_id):
+        self.calls.append(("create", unit_id))
+        return {"token": "pns_" + "a" * 43, "url": "https://avd.example/api/v1/postes/mesures"}
+
+    def remove_probe(self, unit_id):
+        self.calls.append(("remove", unit_id))
+        return True
+
+
+class SupervisionTests(unittest.TestCase):
+    def test_install_sends_token_and_compressed_probe(self):
+        mesh = FakeMesh({"supervision": [{"ok": True, "detail": "sonde installée : premières mesures dans la minute"}]})
+        avd = FakeAvd()
+        ok, text = pilot.supervision(mesh, "node//pn01", "u1", {"actif": True}, avd, nonces())
+        self.assertTrue(ok)
+        self.assertEqual(text, "Sonde installée : premières mesures dans la minute")
+        request = mesh.calls[0][0]
+        self.assertEqual((request["url"], request["jeton"]), ("https://avd.example/api/v1/postes/mesures", "pns_" + "a" * 43))
+        self.assertEqual(gzip.decompress(base64.b64decode(request["script"])), pilot.PROBE_SCRIPT.read_bytes())
+        self.assertEqual(avd.calls, [("create", "u1")])
+        cmd = pilot.build_command(request, "ab12")
+        self.assertLess(len(cmd), 24_000)
+
+    def test_remove(self):
+        mesh = FakeMesh({"supervision": [{"ok": True, "detail": "sonde retirée"}]})
+        avd = FakeAvd()
+        self.assertEqual(pilot.supervision(mesh, "n", "u1", {"actif": False}, avd, nonces()), (True, "Sonde retirée"))
+        self.assertEqual(avd.calls, [("remove", "u1")])
+        self.assertFalse(pilot.supervision(mesh, "n", "", {"actif": True}, avd, nonces())[0])
+
+
 class PowerTests(unittest.TestCase):
     def test_restart_and_event_refusal(self):
         mesh = FakeMesh({"alimentation": [{"ok": True, "detail": "redémarrage dans 30 secondes"}, {"ok": False, "detail": "refusé : le poste est en mode événement"}]})
