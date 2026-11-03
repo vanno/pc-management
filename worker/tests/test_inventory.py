@@ -149,6 +149,12 @@ class AvdPayloadTests(unittest.TestCase):
         p = inv.avd_payload(data, inv.Diff(added=["OBS 31"]))
         self.assertEqual(p["changes"], {"added": ["OBS 31"], "removed": [], "updated": [], "hardware": []})
 
+    def test_payload_drops_control_characters(self):
+        data = inv.parse_output(agent_output(dict(FIXTURE, software=[{"name": "Pilote audio\u0000", "version": "1.0\u0000", "publisher": "Realtek\x1f"}])))
+        sw = inv.avd_payload(data)["software"][0]
+        self.assertEqual(sw, {"name": "Pilote audio", "version": "1.0", "publisher": "Realtek"})
+        self.assertNotIn("\\u0000", json.dumps(inv.avd_payload(data)))
+
     def test_payload_is_json(self):
         data = inv.parse_output(agent_output(FIXTURE))
         json.dumps(inv.avd_payload(data))

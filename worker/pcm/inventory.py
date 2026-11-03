@@ -238,4 +238,20 @@ def avd_payload(data: dict, changes: "Diff | None" = None, source: str = "pc-man
     }
     if changes is not None and not changes.empty:
         payload["changes"] = {"added": changes.added, "removed": changes.removed, "updated": changes.updated, "hardware": changes.hardware}
-    return payload
+    return _clean(payload)
+
+
+# Le registre Windows laisse parfois un caractère nul (ou un autre caractère de
+# contrôle) au bout d'un nom de logiciel. PostgreSQL le refuse dans un jsonb
+# (« unsupported Unicode escape sequence ») et tout l'inventaire serait rejeté.
+_CONTROLS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+
+
+def _clean(value):
+    if isinstance(value, str):
+        return _CONTROLS.sub("", value)
+    if isinstance(value, list):
+        return [_clean(v) for v in value]
+    if isinstance(value, dict):
+        return {k: _clean(v) for k, v in value.items()}
+    return value

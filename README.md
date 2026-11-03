@@ -27,6 +27,15 @@ synchronisé sur sa fiche du parc AVDiagram.
    0069 : avant, le rapport le signale en alerte et le reste du passage se fait.
    `--no-details` désactive cet envoi.
 
+6. `pcm serve` tourne en service (`pcm-service` dans `docker-compose.yml`).
+   Toutes les 30 secondes, il envoie à AVDiagram la liste des postes vus par
+   MeshCentral (`POST /api/v1/postes/battement`) et repart avec au plus une
+   tâche demandée depuis la page Parc, Postes. Il l'exécute (aujourd'hui :
+   « Inventorier », soit le passage du point 5 sur ce seul poste), rend le
+   résultat (`POST /api/v1/postes/taches/{id}`), puis prend la suivante sans
+   attendre. C'est le NAS qui appelle : aucun port ouvert. Il faut un
+   AVDiagram avec la migration 0070.
+
 La clé de rapprochement est la référence de parc AVDiagram (PN01, PC-VANNH...).
 Le nom de l'appareil dans MeshCentral doit être cette référence. En attendant
 les renommages, `config/mapping.json` fait la correspondance (voir
@@ -49,6 +58,24 @@ docker compose run --rm pcm devices
 Le chemin du partage docker dépend du NAS (sur le DS920+ de l'agence : /volume2/docker). Le compte MeshCentral doit être dédié au worker, membre des groupes du parc, avec
 le droit d'exécuter des commandes. Le jeton AVDiagram se crée dans Profil,
 Jetons d'API, par un membre qui a le droit `parc:ecrire`.
+
+## Service de la page Postes
+
+```bash
+docker compose build
+docker compose up -d pcm-service
+docker compose logs -f pcm-service     # une ligne par tâche, et les pannes
+```
+
+Le service ne s'arrête pas sur une panne (MeshCentral, réseau, AVDiagram) :
+il l'écrit au journal et réessaie au battement suivant. Sans battement depuis
+3 minutes, la page Postes affiche un bandeau. Après une mise à jour du code :
+`docker compose build && docker compose up -d pcm-service`.
+
+Une tâche passe en échec avec sa raison quand le poste est hors ligne, quand
+MeshCentral ne connaît aucun agent à ce nom, ou quand l'action est inconnue de
+cette version de l'outil. Une tâche prise et restée sans réponse 30 minutes
+passe en échec côté AVDiagram.
 
 ## Test sur 2 postes
 
@@ -73,6 +100,8 @@ les noms de logiciels accentués sont lisibles.
   depuis le compte SYSTEM. Le rapport l'indique par `software_scope: machine`.
 - La santé de batterie vient de `root\wmi` et peut manquer sur certains modèles.
 - Les postes hors ligne sont listés à part et inventoriés au passage suivant.
+- Les caractères de contrôle (un caractère nul laissé par le registre au bout
+  d'un nom de logiciel) sont retirés avant l'envoi : PostgreSQL les refuse.
 
 ## Développement
 

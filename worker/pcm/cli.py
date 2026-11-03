@@ -4,6 +4,8 @@
     pcm inventory [--only PN01,PN02]  inventaire, rapport, historique local
     pcm inventory --push              idem, puis écriture des fiches AVDiagram
                                       (série, version Windows, inventaire détaillé)
+    pcm serve                         service : exécute les tâches demandées
+                                      depuis la page Postes d'AVDiagram
 
 Sans --push, rien n'est écrit dans AVDiagram : le rapport dit ce qui le serait.
 """
@@ -18,9 +20,10 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from . import inventory as inv
-from .avdiagram import AvdClient, AvdError, plan_update
+from .avdiagram import AvdClient, AvdError
 from .meshctrl import Device, MeshCtrl, MeshError
 from .store import Store
+from .sync import process
 
 
 def load_mapping(path: str | None) -> dict[str, str]:
@@ -63,10 +66,7 @@ def cmd_inventory(args, mesh: MeshCtrl) -> int:
     avd = None
     units = {}
     if args.push or args.check_avd:
-        missing = [k for k in ("AVD_URL", "AVD_TOKEN") if not os.environ.get(k)]
-        if missing:
-            raise AvdError(f"Variables manquantes : {', '.join(missing)}")
-        avd = AvdClient(os.environ["AVD_URL"], os.environ["AVD_TOKEN"])
+        avd = avd_client()
         units = avd.computers()
 
     store = Store(args.db)
@@ -79,41 +79,21 @@ def cmd_inventory(args, mesh: MeshCtrl) -> int:
                 continue
 
             tag = inv.asset_tag_for(device.name, mapping)
-            hostname = (data.get("system") or {}).get("hostname") or ""
-            if hostname.upper() != device.name.upper() and inv.asset_tag_for(hostname, mapping) != tag:
-                report["alertes"].append(f"{tag} : nom Windows {hostname} différent du nom MeshCentral {device.name}")
-            previous = store.latest(tag)
-            store.save(tag, device.id, data)
-            summ = inv.summary(data)
-            changes = inv.diff(previous, data)
-            entry = {"poste": tag, "meshcentral": device.name, **summ}
-            if not changes.empty:
-                entry["changements"] = changes.__dict__
-            if summ["home_edition"]:
-                report["alertes"].append(f"{tag} : Windows édition Famille")
-
-            if avd is not None:
-                unit = units.get(tag.upper())
-                if unit is None:
-                    report["alertes"].append(f"{tag} : aucune fiche AVDiagram avec cette référence")
-                else:
-                    to_write, warnings = plan_update(unit, summ, push_ip=args.push_ip)
-                    report["alertes"].extend(warnings)
-                    entry["avdiagram"] = to_write or "à jour"
-                    if args.push and to_write:
-                        try:
-                            avd.update_unit(unit.asset_tag, **to_write)
-                            entry["avdiagram_ecrit"] = True
-                        except AvdError as exc:
-                            report["erreurs"].append(str(exc))
-                    if args.push and not args.no_details:
-                        # Un AVDiagram sans l'outil (avant la migration 0069)
-                        # ne doit pas faire échouer le passage : c'est un plus.
-                        try:
-                            avd.set_inventory(unit.asset_tag, inv.avd_payload(data, changes))
-                            entry["avdiagram_inventaire"] = True
-                        except AvdError as exc:
-                            report["alertes"].append(f"{tag} : inventaire détaillé non envoyé ({exc})")
+            out = process(
+                device,
+                data,
+                tag=tag,
+                store=store,
+                mapping=mapping,
+                avd=avd,
+                unit=units.get(tag.upper()),
+                push=args.push,
+                push_ip=args.push_ip,
+                details=not args.no_details,
+            )
+            report["alertes"].extend(out.alerts)
+            report["erreurs"].extend(out.errors)
+            entry = out.entry
             report["postes"].append(entry)
 
     report["postes"].sort(key=lambda e: e["poste"])
@@ -121,6 +101,31 @@ def cmd_inventory(args, mesh: MeshCtrl) -> int:
     json.dump(report, sys.stdout, ensure_ascii=False, indent=2)
     print()
     return 1 if report["erreurs"] else 0
+
+
+def avd_client() -> AvdClient:
+    missing = [k for k in ("AVD_URL", "AVD_TOKEN") if not os.environ.get(k)]
+    if missing:
+        raise AvdError(f"Variables manquantes : {', '.join(missing)}")
+    return AvdClient(os.environ["AVD_URL"], os.environ["AVD_TOKEN"])
+
+
+def cmd_serve(args, mesh: MeshCtrl) -> int:
+    from .service import Service, serve
+
+    script_path = os.environ.get("PCM_AGENT_SCRIPT")
+    script = Path(script_path).read_text(encoding="utf-8") if script_path else None
+    inv.build_command(script)
+    service = Service(
+        mesh,
+        avd_client(),
+        Store(args.db),
+        load_mapping(args.mapping),
+        script=script,
+        group=args.group,
+        push_ip=args.push_ip,
+    )
+    return serve(service, interval=args.interval)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -141,11 +146,16 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--concurrency", type=int, default=1)
     p.add_argument("--db", default=os.environ.get("PCM_DB", "data/pcm.sqlite"))
     p.add_argument("--mapping", default=os.environ.get("PCM_MAPPING", "config/mapping.json"))
+    s = sub.add_parser("serve", help="Service : battement vers AVDiagram et tâches de la page Postes")
+    s.add_argument("--interval", type=float, default=float(os.environ.get("PCM_INTERVAL", "30")), help="Secondes entre deux battements (30 par défaut)")
+    s.add_argument("--push-ip", action="store_true", help="Écrire aussi l'adresse IP sur la fiche")
+    s.add_argument("--db", default=os.environ.get("PCM_DB", "data/pcm.sqlite"))
+    s.add_argument("--mapping", default=os.environ.get("PCM_MAPPING", "config/mapping.json"))
     args = parser.parse_args(argv)
 
     mesh = MeshCtrl()
     try:
-        return {"devices": cmd_devices, "inventory": cmd_inventory}[args.cmd](args, mesh)
+        return {"devices": cmd_devices, "inventory": cmd_inventory, "serve": cmd_serve}[args.cmd](args, mesh)
     except (MeshError, AvdError) as exc:
         print(f"Erreur : {exc}", file=sys.stderr)
         return 2

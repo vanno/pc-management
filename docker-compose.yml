@@ -1,4 +1,6 @@
-# Sur le NAS (Container Manager) : docker compose run --rm pcm inventory
+# Sur le NAS (Container Manager) :
+#   docker compose run --rm pcm inventory      un passage à la main
+#   docker compose up -d pcm-service           le service de la page Postes
 services:
   pcm:
     build: .
@@ -9,3 +11,20 @@ services:
       - ./config:/config:ro
     mem_limit: 256m
     restart: "no"
+
+  # Battement toutes les 30 secondes vers AVDiagram, exécute les tâches
+  # demandées depuis Parc, Postes. N'ouvre aucun port : c'est lui qui appelle.
+  pcm-service:
+    image: pointe-noire/pcm:latest
+    env_file: .env
+    command: ["serve"]
+    volumes:
+      - ./data:/data
+      - ./config:/config:ro
+    mem_limit: 256m
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "3"
