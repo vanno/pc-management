@@ -9,6 +9,10 @@
     supervision     pose ou retire la sonde (lot 3)
     envoi           lance un script approuvé dans AVDiagram ou pose un
                     fichier de la bibliothèque sur le poste (lot 4)
+    nettoyage       applique ou annule le profil de nettoyage réversible :
+                    plan d'alimentation, services et tâches inutiles,
+                    réglages de télémétrie et de jeu ; applications Windows
+                    inutiles en option (lot 6)
 
 Tout passe par `agent/pilote.ps1`, envoyé au poste comme l'inventaire
 (`meshctrl runcommand --powershell --reply`, compte SYSTEM), sauf le réveil :
@@ -190,6 +194,23 @@ def event_mode(mesh: MeshCtrl, device_id: str, params: dict, new_nonce: Callable
         return False, "Paramètre `actif` manquant."
     try:
         reply = call(mesh, device_id, {"op": "evenement", "actif": params["actif"], "jours": EVENT_DAYS}, new_nonce, script=script)
+    except (MeshError, PilotError) as exc:
+        return False, str(exc)
+    detail = reply.get("detail") or ""
+    return bool(reply.get("ok")), detail[:1].upper() + detail[1:]
+
+
+CLEANUP_TIMEOUT = 600
+
+
+def cleanup(mesh: MeshCtrl, device_id: str, params: dict, new_nonce: Callable[[], str], script: str | None = None) -> tuple[bool, str]:
+    """Le profil de nettoyage. L'état d'avant reste sur le poste, qui sait l'annuler."""
+    if not isinstance(params.get("actif"), bool):
+        return False, "Paramètre `actif` manquant."
+    body = {"op": "nettoyage", "actif": params["actif"], "applications": params.get("applications") is True}
+    try:
+        # Retirer des applications pour tous les comptes prend plusieurs minutes.
+        reply = call(mesh, device_id, body, new_nonce, timeout=CLEANUP_TIMEOUT, script=script)
     except (MeshError, PilotError) as exc:
         return False, str(exc)
     detail = reply.get("detail") or ""
