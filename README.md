@@ -39,7 +39,7 @@ docker compose build
 docker compose run --rm pcm devices
 ```
 
-Le compte MeshCentral doit être dédié au worker, membre des groupes du parc, avec
+Le chemin du partage docker dépend du NAS (sur le DS920+ de l'agence : /volume2/docker). Le compte MeshCentral doit être dédié au worker, membre des groupes du parc, avec
 le droit d'exécuter des commandes. Le jeton AVDiagram se crée dans Profil,
 Jetons d'API, par un membre qui a le droit `parc:ecrire`.
 
