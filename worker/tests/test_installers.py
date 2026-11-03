@@ -64,6 +64,11 @@ class InstallersTests(unittest.TestCase):
         item.update(kw)
         return self.write([item])[0]
 
+    def test_example_list_is_valid(self):
+        example = Path(__file__).resolve().parents[2] / "config" / "installeurs.example.json"
+        names = [i.name for i in ins.load_installers(example, self.dir)]
+        self.assertEqual(names, ["vMix", "Blackmagic ATEM Switchers", "DaVinci Resolve", "Microsoft 365"])
+
     def test_missing_list_means_no_installers(self):
         self.assertEqual(ins.load_installers(self.cfg, self.dir), [])
 
