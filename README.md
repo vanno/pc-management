@@ -242,6 +242,33 @@ bibliothèque :
   lui-même par une adresse signée dans le dossier choisi
   (`C:\Users\Public\Desktop` par défaut), taille vérifiée.
 
+## Vitesse et régularité (lot 5)
+
+- **Session permanente.** `pcm serve` garde une session ouverte avec
+  MeshCentral (`worker/meshpipe.js`, lancé par l'outil) et marque chaque
+  commande d'un identifiant de réponse à elle. meshctrl 1.2.5 marque toutes ses
+  commandes `meshctrl` et le serveur renvoie chaque réponse à toutes les
+  sessions du compte : deux meshctrl simultanés se volaient leurs réponses.
+  Avec la session permanente, 4 postes travaillent en même temps
+  (`PCM_CONCURRENCY`), les tâches d'un même poste l'une après l'autre (un
+  agent ne fait qu'une commande à la fois). `PCM_MESHPIPE=0` revient à
+  meshctrl, un poste à la fois. Le certificat du serveur est vérifié.
+  L'envoi de fichiers du NAS, le réveil et la liste des postes passent
+  toujours par meshctrl.
+- **Planification.** `PCM_INVENTORY_AT` (« 03:00 » par défaut) : chaque nuit,
+  un inventaire des postes en ligne. `PCM_UPDATE_AT` (« dim 04:00 » par
+  défaut) : chaque semaine, « Installer les logiciels » sur les postes en
+  ligne ; un poste en mode événement est laissé tel quel, sa tâche finit
+  « Ignoré ». `off` coupe l'une ou l'autre. Fuseau : `PCM_TZ`
+  (Europe/Paris). Les tâches passent par la file d'AVDiagram
+  (`POST /api/v1/postes/taches`) et se lisent sur la page Postes. Un créneau
+  manqué n'est rattrapé que dans les 6 heures.
+- **Version de MeshCentral.** Une fois par jour, `meshctrl serverversion`
+  donne la version du serveur et la dernière publiée ; la page Postes
+  affiche un bandeau quand elles diffèrent. La mise à jour du serveur reste
+  une décision manuelle : pensez à aligner `MESHCENTRAL_VERSION` du
+  Dockerfile.
+
 ## Test sur 2 postes
 
 ```bash
