@@ -3,6 +3,7 @@
     pcm devices                       les postes vus par MeshCentral
     pcm inventory [--only PN01,PN02]  inventaire, rapport, historique local
     pcm inventory --push              idem, puis écriture des fiches AVDiagram
+                                      (série, version Windows, inventaire détaillé)
 
 Sans --push, rien n'est écrit dans AVDiagram : le rapport dit ce qui le serait.
 """
@@ -105,6 +106,14 @@ def cmd_inventory(args, mesh: MeshCtrl) -> int:
                             entry["avdiagram_ecrit"] = True
                         except AvdError as exc:
                             report["erreurs"].append(str(exc))
+                    if args.push and not args.no_details:
+                        # Un AVDiagram sans l'outil (avant la migration 0069)
+                        # ne doit pas faire échouer le passage : c'est un plus.
+                        try:
+                            avd.set_inventory(unit.asset_tag, inv.avd_payload(data, changes))
+                            entry["avdiagram_inventaire"] = True
+                        except AvdError as exc:
+                            report["alertes"].append(f"{tag} : inventaire détaillé non envoyé ({exc})")
             report["postes"].append(entry)
 
     report["postes"].sort(key=lambda e: e["poste"])
@@ -124,6 +133,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--push", action="store_true", help="Écrire les fiches AVDiagram")
     p.add_argument("--check-avd", action="store_true", help="Comparer aux fiches AVDiagram sans rien écrire")
     p.add_argument("--push-ip", action="store_true", help="Écrire aussi l'adresse IP (changeante en DHCP)")
+    p.add_argument("--no-details", action="store_true", help="Avec --push, ne pas envoyer l'inventaire détaillé (matériel, logiciels)")
     # meshctrl 1.2.5 répond à toutes ses commandes sous le même identifiant :
     # deux runcommand simultanés du même compte peuvent recevoir la réponse
     # l'un de l'autre. Le jeton détecte l'échange, mais un poste à la fois
