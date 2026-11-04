@@ -48,6 +48,12 @@ PROBE_SCRIPT = Path(__file__).resolve().parents[2] / "agent" / "supervision.ps1"
 DIAGNOSTIC_SCRIPT = Path(__file__).resolve().parents[2] / "agent" / "diagnostic.ps1"
 WALLPAPER_SCRIPT = Path(__file__).resolve().parents[2] / "agent" / "fond.ps1"
 WALLPAPER_INSTALLER = Path(__file__).resolve().parents[2] / "agent" / "fond-pose.ps1"
+THUMBNAIL_SCRIPT = Path(__file__).resolve().parents[2] / "agent" / "vignette.ps1"
+THUMBNAIL_INSTALLER = Path(__file__).resolve().parents[2] / "agent" / "vignette-pose.ps1"
+MESSAGE_KINDS = ("toast", "boite")
+MESSAGE_MAX = 500
+TITLE_MAX = 60
+CONTROL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 REFERENCE_RE = re.compile(r"^[\w .-]{1,60}$")
 INTERFACE_RE = re.compile(r"^[^\W_][\w ._()&+'-]{0,79}$")
 POWER_MODES = ("redemarrer", "eteindre", "reveiller")
@@ -296,6 +302,61 @@ def wallpaper(mesh: MeshCtrl, device_id: str, reference: str, params: dict, new_
         return False, str(exc)
     detail = reply.get("detail") or ""
     return bool(reply.get("ok")), detail[:1].upper() + detail[1:]
+
+
+def thumbnail(mesh: MeshCtrl, device_id: str, unit_id: str, params: dict, avd, new_nonce: Callable[[], str], script: str | None = None) -> tuple[bool, str]:
+    """Met le poste au mur d'écrans (agent/vignette.ps1, jeton pnv_ tiré par
+    AVDiagram et envoyé tel quel au poste) ou l'en retire, par
+    agent/vignette-pose.ps1. Le jeton ne passe pas par le journal du worker."""
+    if not isinstance(params.get("actif"), bool):
+        return False, "Paramètre `actif` manquant."
+    if not unit_id:
+        return False, "La tâche ne dit pas quel exemplaire mettre au mur."
+    try:
+        if params["actif"]:
+            got = avd.create_thumbnail(unit_id)
+            body = {"op": "vignette", "actif": True, "url": got["url"], "jeton": got["token"], "script": pack(THUMBNAIL_SCRIPT.read_bytes())}
+        else:
+            avd.remove_thumbnail(unit_id)
+            body = {"op": "vignette", "actif": False}
+        reply = call(mesh, device_id, body, new_nonce, script=script or THUMBNAIL_INSTALLER.read_text(encoding="utf-8"))
+    except (MeshError, PilotError) as exc:
+        return False, str(exc)
+    except Exception as exc:  # AvdError et réponse inattendue
+        return False, f"AVDiagram : {exc}"
+    detail = reply.get("detail") or ""
+    return bool(reply.get("ok")), detail[:1].upper() + detail[1:]
+
+
+def message(mesh: MeshCtrl, device_id: str, name: str, params: dict, new_nonce: Callable[[], str], script: str | None = None) -> tuple[bool, str]:
+    """Un message à l'écran du poste, par MeshCentral : notification (`toast`)
+    ou fenêtre à valider (`boite`). Refusé en mode événement sans `forcer` :
+    une fenêtre par-dessus le logiciel de direct peut passer à l'antenne. Un
+    poste qui ne sait pas dire son état (ancienne version) n'est pas bloqué."""
+    text = params.get("texte")
+    title = params.get("titre") or "Régie Pointe Noire"
+    kind = params.get("genre") or "toast"
+    if not isinstance(text, str) or not text.strip() or len(text) > MESSAGE_MAX or CONTROL_RE.search(text):
+        return False, "Message vide, trop long ou illisible."
+    if not isinstance(title, str) or len(title) > TITLE_MAX or CONTROL_RE.search(title) or "\n" in title:
+        return False, "Titre trop long ou illisible."
+    if kind not in MESSAGE_KINDS:
+        return False, f"Genre de message inconnu : {kind!r}"
+    if params.get("forcer") is not True:
+        try:
+            st = state(mesh, device_id, new_nonce, script=script)
+        except (MeshError, PilotError):
+            st = {}
+        if st.get("evenement"):
+            return False, f"Refusé : {name} est en mode événement. Cochez « Même en mode événement » pour l'afficher quand même."
+    try:
+        if kind == "toast":
+            mesh.toast(device_id, text.strip(), title.strip())
+            return True, f"Notification envoyée à {name} : elle s'affiche si une session est ouverte."
+        mesh.message_box(device_id, text.strip(), title.strip())
+        return True, f"Fenêtre envoyée à {name} : elle reste jusqu'à OK, 10 minutes au plus."
+    except MeshError as exc:
+        return False, str(exc)
 
 
 def pack(data: bytes) -> str:

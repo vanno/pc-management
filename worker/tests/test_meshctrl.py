@@ -47,5 +47,29 @@ class ErrorDetectionTests(unittest.TestCase):
             self.assertEqual(devices[0].name, "PN01")
 
 
+class MessageTests(unittest.TestCase):
+    def test_toast_passes_message_after_equals_sign(self):
+        m = MeshCtrl()
+        m.command = [sys.executable, "-c", "import sys; print('ok' if '--msg=-- urgent' in sys.argv and '--title=Régie' in sys.argv else 'bad')"]
+        with mock.patch.dict(os.environ, ENV, clear=True):
+            m.toast("node//a", "-- urgent", "Régie")
+
+    def test_toast_refused(self):
+        with mock.patch.dict(os.environ, ENV, clear=True):
+            with self.assertRaisesRegex(MeshError, "Access Denied"):
+                mesh_printing("Access Denied").toast("node//a", "x", "y")
+
+    def test_message_box_without_answer_counts_as_relayed(self):
+        m = MeshCtrl()
+        m.command = [sys.executable, "-c", "import time; time.sleep(30)"]
+        with mock.patch.dict(os.environ, ENV, clear=True), mock.patch("subprocess.run", side_effect=__import__("subprocess").TimeoutExpired("meshctrl", 20)):
+            self.assertEqual(m.message_box("node//a", "x", "y"), "relayée")
+
+    def test_message_box_unroutable(self):
+        with mock.patch.dict(os.environ, ENV, clear=True):
+            with self.assertRaisesRegex(MeshError, "Unable to route"):
+                mesh_printing("Unable to route").message_box("node//a", "x", "y")
+
+
 if __name__ == "__main__":
     unittest.main()

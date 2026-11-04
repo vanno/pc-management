@@ -63,6 +63,11 @@ class CommandTests(unittest.TestCase):
         cmd = pilot.build_command(body, "ab12", script=pilot.WALLPAPER_INSTALLER.read_text(encoding="utf-8"))
         self.assertLess(len(cmd), 16_000)
 
+    def test_thumbnail_installer_and_script_stay_under_the_agent_limit(self):
+        body = {"op": "vignette", "actif": True, "url": "https://avd.exemple/api/v1/postes/vignettes", "jeton": "pnv_" + "a" * 43, "script": pilot.pack(pilot.THUMBNAIL_SCRIPT.read_bytes())}
+        cmd = pilot.build_command(body, "ab12", script=pilot.THUMBNAIL_INSTALLER.read_text(encoding="utf-8"))
+        self.assertLess(len(cmd), 16_000)
+
     def test_parse_checks_nonce(self):
         with self.assertRaisesRegex(pilot.PilotError, "autre commande"):
             pilot.parse_output(pnpl_reply("cd34", ok=True), "ab12")

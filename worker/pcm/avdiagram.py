@@ -117,6 +117,14 @@ class AvdClient:
     def remove_probe(self, unit_id: str) -> bool:
         return bool(self._request("DELETE", "/api/v1/postes/sondes", {"unit_id": unit_id}).get("removed"))
 
+    def create_thumbnail(self, unit_id: str) -> dict:
+        """Met un poste au mur d'écrans (0084) : { token, url }. Le jeton n'est
+        rendu qu'une fois ; il part directement au poste."""
+        return self._request("POST", "/api/v1/postes/vignettes/jetons", {"unit_id": unit_id})
+
+    def remove_thumbnail(self, unit_id: str) -> bool:
+        return bool(self._request("DELETE", "/api/v1/postes/vignettes/jetons", {"unit_id": unit_id}).get("removed"))
+
     def post_diagnostic(self, task_id: str, unit_id: str, data: dict) -> None:
         """Le diagnostic réseau complet d'un poste (0080), gardé avec la tâche."""
         self._request("POST", "/api/v1/postes/diagnostics", {"task_id": task_id, "unit_id": unit_id, "data": data})
