@@ -9,6 +9,8 @@
     supervision     pose ou retire la sonde (lot 3)
     envoi           lance un script approuvé dans AVDiagram ou pose un
                     fichier de la bibliothèque sur le poste (lot 4)
+    fond            pose ou retire le fond d'état et l'icône « État du poste »
+                    (agent/fond.ps1, posé par agent/fond-pose.ps1)
     nettoyage       applique ou annule le profil de nettoyage réversible :
                     plan d'alimentation, services et tâches inutiles,
                     réglages de télémétrie et de jeu ; applications Windows
@@ -44,6 +46,9 @@ MARKER = "PNPL1:"
 AGENT_SCRIPT = Path(__file__).resolve().parents[2] / "agent" / "pilote.ps1"
 PROBE_SCRIPT = Path(__file__).resolve().parents[2] / "agent" / "supervision.ps1"
 DIAGNOSTIC_SCRIPT = Path(__file__).resolve().parents[2] / "agent" / "diagnostic.ps1"
+WALLPAPER_SCRIPT = Path(__file__).resolve().parents[2] / "agent" / "fond.ps1"
+WALLPAPER_INSTALLER = Path(__file__).resolve().parents[2] / "agent" / "fond-pose.ps1"
+REFERENCE_RE = re.compile(r"^[\w .-]{1,60}$")
 INTERFACE_RE = re.compile(r"^[^\W_][\w ._()&+'-]{0,79}$")
 POWER_MODES = ("redemarrer", "eteindre", "reveiller")
 # Le délai pendant lequel le poste doit joindre MeshCentral avant de revenir en arrière.
@@ -191,7 +196,7 @@ def power(mesh: MeshCtrl, device_id: str, params: dict, new_nonce: Callable[[], 
 
 
 # Les parties du mode événement, dans l'ordre où le poste les applique.
-EVENT_PARTS = ("windows_update", "veille", "notifications", "conseils")
+EVENT_PARTS = ("windows_update", "veille", "notifications", "conseils", "fond")
 
 
 def event_mode(mesh: MeshCtrl, device_id: str, params: dict, new_nonce: Callable[[], str], script: str | None = None) -> tuple[bool, str]:
@@ -271,6 +276,24 @@ def supervision(mesh: MeshCtrl, device_id: str, unit_id: str, params: dict, avd,
         return False, str(exc)
     except Exception as exc:  # AvdError et réponse inattendue
         return False, f"AVDiagram : {exc}"
+    detail = reply.get("detail") or ""
+    return bool(reply.get("ok")), detail[:1].upper() + detail[1:]
+
+
+def wallpaper(mesh: MeshCtrl, device_id: str, reference: str, params: dict, new_nonce: Callable[[], str], script: str | None = None) -> tuple[bool, str]:
+    """Pose ou retire le fond d'état (agent/fond.ps1) par agent/fond-pose.ps1,
+    à part de pilote.ps1 pour rester sous la longueur de commande."""
+    if not isinstance(params.get("actif"), bool):
+        return False, "Paramètre `actif` manquant."
+    body: dict = {"op": "fond", "actif": params["actif"]}
+    if params["actif"]:
+        if not REFERENCE_RE.fullmatch(reference or ""):
+            return False, "Référence du poste illisible pour le fond d'état."
+        body.update({"reference": reference, "script": pack(WALLPAPER_SCRIPT.read_bytes())})
+    try:
+        reply = call(mesh, device_id, body, new_nonce, script=script or WALLPAPER_INSTALLER.read_text(encoding="utf-8"))
+    except (MeshError, PilotError) as exc:
+        return False, str(exc)
     detail = reply.get("detail") or ""
     return bool(reply.get("ok")), detail[:1].upper() + detail[1:]
 

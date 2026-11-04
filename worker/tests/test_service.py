@@ -1,3 +1,5 @@
+import base64
+import gzip
 import json
 import signal
 import tempfile
@@ -9,6 +11,7 @@ from pcm.avdiagram import AvdError, Unit
 from pcm.meshctrl import Device, MeshError
 from pcm.service import Service, serve
 from pcm.store import Store
+from pcm import pilot
 
 from pcm import software as sw
 from test_inventory import FIXTURE, agent_output
@@ -376,6 +379,18 @@ class ServiceTests(unittest.TestCase):
         self.service(mesh, avd).tick()
         self.assertEqual(mesh.pilot_ops[0]["op"], "evenement")
         self.assertEqual(avd.finished[0][1:], (True, "Mode événement actif"))
+
+    def test_wallpaper_task_sends_installer_with_reference(self):
+        mesh = FakeMesh([PN01])
+        avd = FakeAvd([{**task(action="fond", id="f1"), "params": {"actif": True}}, {**task(action="fond", id="f2"), "params": {"actif": False}}])
+        svc = self.service(mesh, avd)
+        svc.tick()
+        svc.tick()
+        posee, retiree = mesh.pilot_ops
+        self.assertEqual((posee["op"], posee["actif"], posee["reference"]), ("fond", True, "PN01"))
+        self.assertEqual(gzip.decompress(base64.b64decode(posee["script"])), pilot.WALLPAPER_SCRIPT.read_bytes())
+        self.assertEqual(retiree, {"op": "fond", "actif": False})
+        self.assertTrue(avd.finished[0][1] and avd.finished[1][1])
 
     def test_event_mode_parts(self):
         mesh = FakeMesh([PN01])

@@ -47,7 +47,7 @@ from .sync import process
 
 SOURCE = "pc-management"
 RESULT_MAX = 4000
-ACTIONS = ("inventaire", "logiciels", "alimentation", "reseau", "mode_evenement", "supervision", "envoi", "nettoyage", "diagnostic")
+ACTIONS = ("inventaire", "logiciels", "alimentation", "reseau", "mode_evenement", "supervision", "envoi", "nettoyage", "diagnostic", "fond")
 
 
 def load_software(profile_path, installers_path, installers_dir, avd=None):
@@ -321,6 +321,8 @@ class Service:
             return ok, text if len(text) <= RESULT_MAX else text[: RESULT_MAX - 1] + "…"
         if action == "mode_evenement":
             return pilot.event_mode(self.mesh, device.id, params, inv.new_nonce, script=self.pilot_script)
+        if action == "fond":
+            return pilot.wallpaper(self.mesh, device.id, tag, params, inv.new_nonce)
         if action == "nettoyage":
             return pilot.cleanup(self.mesh, device.id, params, inv.new_nonce, script=self.pilot_script)
         if action == "diagnostic":
