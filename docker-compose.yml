@@ -1,10 +1,11 @@
 # Sur le NAS (Container Manager) :
 #   docker compose run --rm pcm inventory      un passage à la main
 #   docker compose up -d pcm-service           le service de la page Postes
+#   sh scripts/maj-nas.sh                       dernière image publiée par GitHub
 services:
   pcm:
     build: .
-    image: pointe-noire/pcm:latest
+    image: ${PCM_IMAGE:-ghcr.io/vanno/pc-management:latest}
     env_file: .env
     volumes:
       - ./data:/data
@@ -16,7 +17,7 @@ services:
   # Battement toutes les 30 secondes vers AVDiagram, exécute les tâches
   # demandées depuis Parc, Postes. N'ouvre aucun port : c'est lui qui appelle.
   pcm-service:
-    image: pointe-noire/pcm:latest
+    image: ${PCM_IMAGE:-ghcr.io/vanno/pc-management:latest}
     env_file: .env
     command: ["serve"]
     volumes:
