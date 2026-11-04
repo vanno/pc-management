@@ -58,6 +58,11 @@ class CommandTests(unittest.TestCase):
         cmd = pilot.build_command({"op": "diagnostic"}, "ab12", script=pilot.DIAGNOSTIC_SCRIPT.read_text(encoding="utf-8"))
         self.assertLess(len(cmd), 16_000)
 
+    def test_wallpaper_installer_and_script_stay_under_the_agent_limit(self):
+        body = {"op": "fond", "actif": True, "reference": "PN-UK", "script": pilot.pack(pilot.WALLPAPER_SCRIPT.read_bytes())}
+        cmd = pilot.build_command(body, "ab12", script=pilot.WALLPAPER_INSTALLER.read_text(encoding="utf-8"))
+        self.assertLess(len(cmd), 16_000)
+
     def test_parse_checks_nonce(self):
         with self.assertRaisesRegex(pilot.PilotError, "autre commande"):
             pilot.parse_output(pnpl_reply("cd34", ok=True), "ab12")

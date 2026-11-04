@@ -9,7 +9,8 @@
         alimentation     { mode: redemarrer | eteindre, force }
         reseau           { interface, dhcp, ip, prefixe, passerelle, dns, retour, hote, port, delai }
         reseau_resultat  lit le résultat du dernier changement de réseau
-        evenement        { actif, jours }
+        evenement        { actif, jours, parties } (windows_update, veille,
+                         notifications, conseils, fond ; toutes sans parties)
         supervision      { actif, url, jeton, script } : pose ou retire la sonde
                          (script : agent/supervision.ps1, gzip puis base64)
         script           { empreinte, script, delai } : lance un script approuvé
@@ -117,7 +118,7 @@ function Get-Comptes {
     @(Get-ChildItem 'Registry::HKEY_USERS' -ErrorAction SilentlyContinue | Where-Object { $_.PSChildName -match '^S-1-5-21-[\d-]+$' } | ForEach-Object { $_.PSChildName })
 }
 
-$toutesParties = @('windows_update', 'veille', 'notifications', 'conseils')
+$toutesParties = @('windows_update', 'veille', 'notifications', 'conseils', 'fond')
 $cleToast = 'Software\Microsoft\Windows\CurrentVersion\PushNotifications'
 $cleNotif = 'Software\Microsoft\Windows\CurrentVersion\Notifications\Settings'
 $cleCdm = 'Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager'
@@ -178,6 +179,8 @@ function Set-Partie([string]$Partie, $Avant, [int]$Jours) {
             }
             "conseils Windows coupés pour $($comptes.Count) compte(s)"
         }
+        # Le fond d'état (fond.ps1) passe au noir : il lit les parties actives.
+        'fond' { 'fond d''écran noir' }
     }
 }
 
@@ -215,6 +218,7 @@ function Reset-Partie([string]$Partie, $Avant) {
             }
             "conseils Windows rendus pour $n compte(s)"
         }
+        'fond' { 'fond d''écran rendu' }
     }
 }
 
@@ -711,6 +715,31 @@ function Disable-Nettoyage {
     $result.detail = $txt
 }
 
+# --- Fond d'état (agent/fond-pose.ps1) ------------------------------------------
+
+# Après chaque commande : la dernière commande et la sonde pour le fond, relu
+# tout de suite dans les sessions ouvertes. Sept jours après un retrait, la
+# tâche part.
+function Update-Fond {
+    $d = Join-Path $base 'fond'
+    $f = Join-Path $d 'etat.json'
+    if ($result.op -eq 'etat' -or -not (Test-Path $f)) { return }
+    try {
+        $e = Get-Content -Raw -Encoding UTF8 $f | ConvertFrom-Json
+        if ($e.retire -and $e.retireLe -and ((Get-Date) - [datetime]$e.retireLe).TotalDays -gt 7) {
+            Unregister-ScheduledTask -TaskName 'PointeNoire-Fond' -Confirm:$false -ErrorAction SilentlyContinue
+            Remove-Item $d -Recurse -Force
+            return
+        }
+        $t = "$($result.op) : $($result.detail)"
+        if ($t.Length -gt 90) { $t = $t.Substring(0, 89) + '…' }
+        $e | Add-Member -NotePropertyName derniere -NotePropertyValue ([ordered]@{ texte = $t; le = (Get-Date).ToString('o') }) -Force
+        $e | Add-Member -NotePropertyName sonde -NotePropertyValue (Test-Path (Join-Path $dossierSonde 'config.json')) -Force
+        Write-Utf8 $f ($e | ConvertTo-Json -Depth 4)
+        Start-ScheduledTask -TaskName 'PointeNoire-Fond' -ErrorAction SilentlyContinue
+    } catch { }
+}
+
 # --- Entrée --------------------------------------------------------------------
 
 try {
@@ -762,4 +791,5 @@ try {
     $result.ok = $false
     $result.detail = $_.Exception.Message
 }
+Update-Fond
 Send-Result

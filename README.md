@@ -268,6 +268,19 @@ compressé (gzip puis base64) comme les autres scripts.
   mode événement ». Le fichier disparaît quand plus aucune partie n'est
   active. Installer les logiciels est refusé tant qu'il existe. Seuls les
   comptes ouverts au moment de la commande sont touchés.
+- Fond d'état (`agent/fond.ps1`, posé par `agent/fond-pose.ps1`) : sur
+  l'écran principal, la référence, les cartes (IP, profil, débit), le mode
+  événement partie par partie, le nettoyage, la sonde et la dernière commande ;
+  gris en temps normal, orange en mode événement partiel, rouge complet. Les
+  autres écrans sont noirs : rien ne part vers un projecteur ou un mur LED. La
+  partie `fond` du mode événement met tout au noir, la référence en petit.
+  Une tâche PointeNoire-Fond (groupe Utilisateurs, par `wscript` pour
+  qu'aucune fenêtre ne s'ouvre) le redessine à l'ouverture de session, toutes
+  les 15 minutes et après chaque commande du pilote. L'icône « État du poste »
+  du Bureau public ouvre le détail en local. Le fond d'origine de chaque compte
+  est gardé dans `%LOCALAPPDATA%\PointeNoire\fond-avant.json` et rendu au
+  retrait ; un compte fermé le retrouve à sa prochaine session, la tâche part
+  7 jours après.
 - Réseau : la commande garde la configuration de la carte dans
   `C:\ProgramData\PointeNoire\reseau\avant.json`, puis lance une tâche
   planifiée `PointeNoire-Reseau` (SYSTEM) qui applique la demande et teste
