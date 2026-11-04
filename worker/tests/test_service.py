@@ -433,3 +433,30 @@ class ToolUpdateTests(unittest.TestCase):
         svc.tick()
         self.assertFalse((self.data / "maj-demandee").exists())
         self.assertEqual(avd.heartbeats[0]["tool"]["nas"]["version"], "dev")
+
+
+class MeshDownTests(unittest.TestCase):
+    """MeshCentral injoignable : AVDiagram reçoit l'erreur (alerte du parc, 0079)."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.store = Store(Path(self.tmp.name) / "pcm.sqlite")
+
+    def tearDown(self):
+        self.store.db.close()
+        self.tmp.cleanup()
+
+    def test_mesh_error_is_reported_then_cleared(self):
+        avd = FakeAvd()
+        mesh = FakeMesh([PN01], fail="connect ECONNREFUSED")
+        svc = Service(mesh, avd, self.store, {}, logger=lambda m: None)
+        svc.data_dir = self.tmp.name
+        with self.assertRaises(MeshError):
+            svc.tick()
+        beat = avd.heartbeats[-1]
+        self.assertIsNone(beat["devices"])
+        self.assertEqual(beat["limit"], 0)
+        self.assertIn("ECONNREFUSED", beat["tool"]["mesh_error"])
+        mesh.fail = None
+        svc.tick()
+        self.assertNotIn("mesh_error", avd.heartbeats[-1]["tool"])
