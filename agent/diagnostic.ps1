@@ -58,7 +58,10 @@ function Get-Wifi {
     $sortie = & netsh.exe wlan show interfaces
     $ErrorActionPreference = 'Stop'
     $w = [ordered]@{}
-    foreach ($ligne in @($sortie)) {
+    foreach ($brut in @($sortie)) {
+        # netsh français met une espace insécable avant « % » et « GHz » ; lue
+        # dans la mauvaise page de code, elle devient « ┬á » et casse le motif.
+        $ligne = ([string]$brut) -replace '\u252C\u00E1|\u00A0', ' '
         if ($ligne -match '^\s*SSID\s*:\s*(.+)$') { $w.ssid = $Matches[1].Trim() }
         elseif ($ligne -match '^\s*Signal\s*:\s*(\d+)\s*%') { $w.signal = [int]$Matches[1] }
         elseif ($ligne -match '^\s*(Bande|Band)\s*:\s*(.+)$') { $w.bande = $Matches[2].Trim() }
