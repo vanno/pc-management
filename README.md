@@ -292,6 +292,13 @@ passerelle et vers 1.1.1.1. Elle les envoie directement à AVDiagram
 Sans réseau, les mesures attendent (10 au plus). Un 401 (sonde retirée ou
 remplacée) désactive la tâche. Le jeton de sonde n'ouvre que cette route.
 
+Le lien de chaque carte part aussi : filaire ou non, paquets en erreur sur
+l'intervalle, et une carte filaire tombée depuis moins de 10 minutes
+(`down`, état dans `liens.json`). AVDiagram en tire « lien coupé », « lien à
+100 Mb/s » et « erreurs réseau », et une alerte en mode événement. Avec des
+switchs non manageables (GS105), c'est le seul regard sur le câble. Un poste
+déjà supervisé reçoit cette sonde au prochain « Superviser ».
+
 ## Envois : scripts approuvés et fichiers
 
 L'onglet « Envois » de la page Postes d'AVDiagram (migration 0075) tient une
