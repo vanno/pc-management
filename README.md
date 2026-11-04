@@ -111,6 +111,21 @@ revenir à une version précise : `PCM_IMAGE=ghcr.io/vanno/pc-management:<commit
 dans `.env`, puis `docker compose up -d pcm-service`. `docker compose build`
 reste possible pour un essai local.
 
+## Diagnostic réseau et réseaux du parc
+
+« Diagnostic réseau » (page Postes) lance `agent/diagnostic.ps1` sur le poste,
+sans rien changer : cartes et adresses, Wi-Fi, profil et état du pare-feu,
+DNS, ports TCP joignables (MeshCentral, RTMP YouTube, Facebook Live, plus les
+cibles demandées), ports à l'écoute avec leur processus. La version complète
+ajoute le débit internet (speed.cloudflare.com, environ 60 Mo) et le ping de
+tout le réseau local (/22 au plus large). Le détail part dans AVDiagram
+(`POST /api/v1/postes/diagnostics`, migration 0080).
+
+La sonde de supervision remonte aussi l'adresse, le préfixe, la passerelle, le
+DHCP et le profil du pare-feu de chaque carte : la page Postes regroupe les
+postes par réseau. Une sonde déjà posée garde l'ancien script : « Superviser »
+à nouveau la remplace.
+
 ## Service de la page Postes
 
 ```bash

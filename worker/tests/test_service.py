@@ -56,6 +56,8 @@ class FakeMesh:
             self.pilot_ops.append(params)
             if params["op"] == "etat":
                 return pnpl_reply(nonce, op="etat", ok=True, evenement=self.event, depuis="2026-11-03T09:00:00", cartes=[])
+            if params["op"] == "diagnostic":
+                return pnpl_reply(nonce, op="diagnostic", ok=True, detail="Ethernet 192.168.1.20/24 ; ports : 4/4 joignables", diagnostic={"poste": "PN01", "cartes": []})
             return pnpl_reply(nonce, op=params["op"], ok=True, detail="mode événement actif")
         if "$env:PNWG_NONCE='" in command:
             nonce = command.split("$env:PNWG_NONCE='", 1)[1].split("'", 1)[0]
@@ -109,8 +111,8 @@ PN02 = Device("node//pn02", "pn2", "Régie", False, "Windows 10 Famille")
 MAC = Device("node//mac", "MAC01", "Régie", True, "macOS 14")
 
 
-def task(tag="PN01", action="inventaire", id="t1"):
-    return {"id": id, "unit_id": "u1", "asset_tag": tag, "action": action, "params": {}}
+def task(tag="PN01", action="inventaire", id="t1", params=None):
+    return {"id": id, "unit_id": "u1", "asset_tag": tag, "action": action, "params": params or {}}
 
 
 class ServiceTests(unittest.TestCase):
@@ -460,3 +462,32 @@ class MeshDownTests(unittest.TestCase):
         mesh.fail = None
         svc.tick()
         self.assertNotIn("mesh_error", avd.heartbeats[-1]["tool"])
+
+
+class DiagnosticTests(unittest.TestCase):
+    """Le diagnostic réseau (0080) : le résumé dans la tâche, le détail à part."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.store = Store(Path(self.tmp.name) / "pcm.sqlite")
+
+    def tearDown(self):
+        self.store.db.close()
+        self.tmp.cleanup()
+
+    def test_diagnostic_posts_details_and_filters_targets(self):
+        avd = FakeAvd([task(action="diagnostic", params={"debit": True, "scan": True, "cibles": [{"hote": "srt.exemple.fr", "port": 9000}, {"hote": "bad host;rm", "port": 1}]})])
+        avd.diagnostics = []
+        avd.post_diagnostic = lambda task_id, unit_id, data: avd.diagnostics.append((task_id, data))
+        mesh = FakeMesh([PN01])
+        svc = Service(mesh, avd, self.store, {}, logger=lambda m: None)
+        svc.data_dir = self.tmp.name
+        svc.tick()
+        op = mesh.pilot_ops[-1]
+        self.assertEqual(op["op"], "diagnostic")
+        self.assertTrue(op["debit"] and op["scan"])
+        self.assertEqual(op["cibles"], [{"hote": "srt.exemple.fr", "port": 9000}])
+        (_, ok, result), = avd.finished
+        self.assertTrue(ok)
+        self.assertIn("ports : 4/4", result)
+        self.assertEqual(avd.diagnostics[0][1]["poste"], "PN01")

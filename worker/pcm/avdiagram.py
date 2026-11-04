@@ -117,6 +117,10 @@ class AvdClient:
     def remove_probe(self, unit_id: str) -> bool:
         return bool(self._request("DELETE", "/api/v1/postes/sondes", {"unit_id": unit_id}).get("removed"))
 
+    def post_diagnostic(self, task_id: str, unit_id: str, data: dict) -> None:
+        """Le diagnostic réseau complet d'un poste (0080), gardé avec la tâche."""
+        self._request("POST", "/api/v1/postes/diagnostics", {"task_id": task_id, "unit_id": unit_id, "data": data})
+
     def request_tasks(self, action: str, asset_tags: list[str], params: dict | None = None) -> dict:
         """Demande une tâche par poste, comme la page Postes (lot 5, tâches
         planifiées) : { requested, busy, unknown }."""
