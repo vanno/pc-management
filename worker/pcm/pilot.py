@@ -43,6 +43,7 @@ from .meshctrl import MeshCtrl, MeshError
 MARKER = "PNPL1:"
 AGENT_SCRIPT = Path(__file__).resolve().parents[2] / "agent" / "pilote.ps1"
 PROBE_SCRIPT = Path(__file__).resolve().parents[2] / "agent" / "supervision.ps1"
+DIAGNOSTIC_SCRIPT = Path(__file__).resolve().parents[2] / "agent" / "diagnostic.ps1"
 INTERFACE_RE = re.compile(r"^[^\W_][\w ._()&+'-]{0,79}$")
 POWER_MODES = ("redemarrer", "eteindre", "reveiller")
 # Le délai pendant lequel le poste doit joindre MeshCentral avant de revenir en arrière.
@@ -215,6 +216,29 @@ def cleanup(mesh: MeshCtrl, device_id: str, params: dict, new_nonce: Callable[[]
         return False, str(exc)
     detail = reply.get("detail") or ""
     return bool(reply.get("ok")), detail[:1].upper() + detail[1:]
+
+
+DIAGNOSTIC_TIMEOUT = 180
+
+
+def diagnostic(mesh: MeshCtrl, device_id: str, params: dict, new_nonce: Callable[[], str], script: str | None = None) -> tuple[bool, str, dict | None]:
+    """Le diagnostic réseau du poste : cartes, Wi-Fi, pare-feu, DNS, ports
+    joignables, ports à l'écoute ; le débit internet et le scan du réseau local
+    s'ils sont demandés. Rien n'est changé sur le poste."""
+    targets = []
+    for t in params.get("cibles") or []:
+        if isinstance(t, dict) and isinstance(t.get("hote"), str) and isinstance(t.get("port"), int) and 0 < t["port"] < 65536:
+            if re.fullmatch(r"[A-Za-z0-9.-]{1,253}", t["hote"]):
+                targets.append({"hote": t["hote"], "port": t["port"]})
+    body = {"op": "diagnostic", "debit": params.get("debit") is True, "scan": params.get("scan") is True, "cibles": targets[:16]}
+    try:
+        # Un script à part : pilote.ps1 reste sous la longueur de commande de l'agent.
+        reply = call(mesh, device_id, body, new_nonce, timeout=DIAGNOSTIC_TIMEOUT, script=script or DIAGNOSTIC_SCRIPT.read_text(encoding="utf-8"))
+    except (MeshError, PilotError) as exc:
+        return False, str(exc), None
+    detail = reply.get("detail") or ""
+    data = reply.get("diagnostic") if isinstance(reply.get("diagnostic"), dict) else None
+    return bool(reply.get("ok")), detail[:1].upper() + detail[1:], data
 
 
 def supervision(mesh: MeshCtrl, device_id: str, unit_id: str, params: dict, avd, new_nonce: Callable[[], str], script: str | None = None) -> tuple[bool, str]:

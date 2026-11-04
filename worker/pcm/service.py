@@ -47,7 +47,7 @@ from .sync import process
 
 SOURCE = "pc-management"
 RESULT_MAX = 4000
-ACTIONS = ("inventaire", "logiciels", "alimentation", "reseau", "mode_evenement", "supervision", "envoi", "nettoyage")
+ACTIONS = ("inventaire", "logiciels", "alimentation", "reseau", "mode_evenement", "supervision", "envoi", "nettoyage", "diagnostic")
 
 
 def load_software(profile_path, installers_path, installers_dir, avd=None):
@@ -323,6 +323,14 @@ class Service:
             return pilot.event_mode(self.mesh, device.id, params, inv.new_nonce, script=self.pilot_script)
         if action == "nettoyage":
             return pilot.cleanup(self.mesh, device.id, params, inv.new_nonce, script=self.pilot_script)
+        if action == "diagnostic":
+            ok, text, data = pilot.diagnostic(self.mesh, device.id, params, inv.new_nonce)
+            if data is not None:
+                try:
+                    self.avd.post_diagnostic(task.get("id") or "", task.get("unit_id") or "", data)
+                except AvdError as exc:
+                    text += f" (détail non enregistré dans AVDiagram : {exc})"
+            return ok, _short(text)
         if action == "reseau":
             ok, text = pilot.network(self.mesh, device.id, params, os.environ.get("MESHCTRL_URL"), inv.new_nonce, sleep=self.sleep, script=self.pilot_script)
             return ok, _short(text)

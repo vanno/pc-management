@@ -54,6 +54,10 @@ class CommandTests(unittest.TestCase):
         with self.assertRaises(pilot.PilotError):
             pilot.build_command({}, "zz';")
 
+    def test_diagnostic_script_travels_alone_under_the_same_limit(self):
+        cmd = pilot.build_command({"op": "diagnostic"}, "ab12", script=pilot.DIAGNOSTIC_SCRIPT.read_text(encoding="utf-8"))
+        self.assertLess(len(cmd), 16_000)
+
     def test_parse_checks_nonce(self):
         with self.assertRaisesRegex(pilot.PilotError, "autre commande"):
             pilot.parse_output(pnpl_reply("cd34", ok=True), "ab12")

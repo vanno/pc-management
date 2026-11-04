@@ -9,7 +9,10 @@
       cpu, ram (% occupée), disk_free (% libre du disque système),
       gateway_ms / gateway_loss, internet_ms / internet_loss (4 pings, 1 s),
       nics : débit reçu et envoyé de chaque carte physique active, en bits
-             par seconde, calculé sur les compteurs d'octets de la carte.
+             par seconde, calculé sur les compteurs d'octets de la carte ;
+             et son réseau (adresse IPv4, préfixe, passerelle, DHCP, profil
+             du pare-feu Public ou Privé), pour savoir quels postes partagent
+             un réseau.
 
   Sans réseau, les mesures attendent dans en-attente.json (10 au plus) et
   partent à l'exécution suivante. Un 401 veut dire sonde retirée ou
@@ -29,6 +32,21 @@ function Get-Compteurs {
         $s = Get-NetAdapterStatistics -Name $a.Name -ErrorAction SilentlyContinue
         if ($s) { $r[$a.Name] = @{ rx = [double]$s.ReceivedBytes; tx = [double]$s.SentBytes; speed = [double]$a.Speed } }
     }
+    $r
+}
+
+function Get-Reseau([string]$Alias) {
+    $r = [ordered]@{ ipv4 = $null; prefix = $null; gateway = $null; dhcp = $null; profile = $null }
+    try {
+        $ip = @(Get-NetIPAddress -InterfaceAlias $Alias -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object { $_.IPAddress -notlike '169.254.*' }) | Select-Object -First 1
+        if ($ip) { $r.ipv4 = $ip.IPAddress; $r.prefix = [int]$ip.PrefixLength }
+        $route = @(Get-NetRoute -InterfaceAlias $Alias -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue | Sort-Object RouteMetric) | Select-Object -First 1
+        if ($route) { $r.gateway = $route.NextHop }
+        $itf = Get-NetIPInterface -InterfaceAlias $Alias -AddressFamily IPv4 -ErrorAction SilentlyContinue
+        if ($itf) { $r.dhcp = ($itf.Dhcp -eq 'Enabled') }
+        $profil = Get-NetConnectionProfile -InterfaceAlias $Alias -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($profil) { $r.profile = [string]$profil.NetworkCategory }
+    } catch { }
     $r
 }
 
@@ -67,7 +85,8 @@ function Get-Mesure($Avant, $Apres, [double]$Secondes) {
         if (-not $Avant.ContainsKey($nom) -or $Secondes -le 0) { continue }
         $rx = [Math]::Max(0, ($Apres[$nom].rx - $Avant[$nom].rx) * 8 / $Secondes)
         $tx = [Math]::Max(0, ($Apres[$nom].tx - $Avant[$nom].tx) * 8 / $Secondes)
-        $cartes += [ordered]@{ name = $nom; rx = [Math]::Round($rx); tx = [Math]::Round($tx); speed = $Apres[$nom].speed }
+        $n = Get-Reseau $nom
+        $cartes += [ordered]@{ name = $nom; rx = [Math]::Round($rx); tx = [Math]::Round($tx); speed = $Apres[$nom].speed; ipv4 = $n.ipv4; prefix = $n.prefix; gateway = $n.gateway; dhcp = $n.dhcp; profile = $n.profile }
     }
     [ordered]@{
         at            = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
