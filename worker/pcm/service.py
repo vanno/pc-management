@@ -138,7 +138,19 @@ class Service:
 
     def tick(self) -> int:
         """Un battement. Rend le nombre de tâches traitées."""
-        devices = [d for d in self.mesh.list_devices(self.group) if d.is_windows]
+        try:
+            devices = [d for d in self.mesh.list_devices(self.group) if d.is_windows]
+        except MeshError as exc:
+            # MeshCentral injoignable : AVDiagram le sait (alerte du parc,
+            # 0079), l'état des postes y reste celui d'avant.
+            self.tool["mesh_error"] = _short(str(exc))[:300] or "MeshCentral ne répond pas"
+            self.tool["nas"] = self._nas_state()
+            try:
+                self.avd.heartbeat(SOURCE, None, limit=0, tool=self.tool)
+            except Exception as inner:  # le battement en échec est déjà dit par serve()
+                self.log(f"battement sans MeshCentral en échec : {inner}")
+            raise
+        self.tool.pop("mesh_error", None)
         by_tag = {inv.asset_tag_for(d.name, self.mapping).upper(): d for d in devices}
         mesh_url = os.environ.get("MESHCTRL_URL")
         seen = [
