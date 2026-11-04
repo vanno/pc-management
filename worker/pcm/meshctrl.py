@@ -230,6 +230,31 @@ class MeshCtrl:
             raise MeshError(f"meshctrl upload : envoi non terminé : {last[:200]}")
 
 
+    def toast(self, device_id: str, message: str, title: str) -> None:
+        """Une notification Windows dans la session ouverte du poste. Le serveur
+        répond « ok » dès qu'il a relayé : sans session ouverte, rien ne
+        s'affiche. `--msg=` garde tel quel un message qui commence par un tiret."""
+        out = self._run("devicetoast", "--id", device_id, f"--msg={message}", f"--title={title}", timeout=60).strip()
+        last = (out.splitlines() or [""])[-1].strip()
+        if last.lower() != "ok":
+            raise MeshError(f"meshctrl devicetoast : {last or '(sortie vide)'}")
+
+    def message_box(self, device_id: str, message: str, title: str, timeout_ms: int = 600_000) -> str:
+        """Une fenêtre au milieu de l'écran du poste, jusqu'à OK ou `timeout_ms`.
+
+        Le serveur ne répond que si le message ne passe pas (« Unable to
+        route ») : une attente de 20 secondes sans réponse veut dire relayé."""
+        try:
+            out = self._run("devicemessage", "--id", device_id, f"--msg={message}", f"--title={title}", "--timeout", str(timeout_ms), timeout=20).strip()
+        except MeshError as exc:
+            if "délai dépassé" in str(exc):
+                return "relayée"
+            raise
+        last = (out.splitlines() or [""])[-1].strip()
+        if last and last.lower() not in ("ok", "relayée"):
+            raise MeshError(f"meshctrl devicemessage : {last}")
+        return "relayée"
+
     def wake(self, device_id: str) -> str:
         """Wake-on-LAN : le serveur et chaque agent connecté envoient le paquet
         magique aux adresses MAC connues du poste. Rend la réponse du serveur,

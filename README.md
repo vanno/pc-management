@@ -281,6 +281,20 @@ compressé (gzip puis base64) comme les autres scripts.
   est gardé dans `%LOCALAPPDATA%\PointeNoire\fond-avant.json` et rendu au
   retrait ; un compte fermé le retrouve à sa prochaine session, la tâche part
   7 jours après.
+- Mur d'écrans (`agent/vignette.ps1`, posé par `agent/vignette-pose.ps1`) :
+  AVDiagram tire un jeton `pnv_` par poste, qui ne permet que de poser l'image
+  de son écran. Une tâche PointeNoire-Vignette (groupe Utilisateurs, chaque
+  minute, par `wscript`) demande deux fois par minute si la page du mur montre
+  ce poste ; seulement alors elle envoie une image réduite de tous les écrans
+  (JPEG, 1920 x 540 au plus) toutes les 10 secondes, 30 en mode événement.
+  Seule la session de la console capture ; écran verrouillé, elle le dit sans
+  image. Le jeton est lisible par les comptes du poste (la capture tourne dans
+  leur session). Le retrait enlève la tâche et le dossier.
+- Message à l'écran : `meshctrl devicetoast` (notification) ou
+  `devicemessage` (fenêtre à valider, 10 minutes au plus). Refusé sur un poste
+  en mode événement, sauf avec `forcer`. MeshCentral ne confirme pas
+  l'affichage d'une fenêtre : sans réponse en 20 secondes, elle est tenue
+  pour relayée.
 - Réseau : la commande garde la configuration de la carte dans
   `C:\ProgramData\PointeNoire\reseau\avant.json`, puis lance une tâche
   planifiée `PointeNoire-Reseau` (SYSTEM) qui applique la demande et teste

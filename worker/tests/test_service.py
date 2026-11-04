@@ -30,6 +30,14 @@ class FakeMesh:
         self.event = False
         self.pilot_ops = []
         self.woken = []
+        self.messages = []
+
+    def toast(self, device_id, message, title):
+        self.messages.append(("toast", device_id, message, title))
+
+    def message_box(self, device_id, message, title, timeout_ms=600_000):
+        self.messages.append(("boite", device_id, message, title))
+        return "relayée"
 
     def wake(self, device_id):
         self.woken.append(device_id)
@@ -83,6 +91,15 @@ class FakeAvd:
         self.inventories = []
         self.updates = []
         self.catalogue = None
+        self.thumbnails = []
+
+    def create_thumbnail(self, unit_id):
+        self.thumbnails.append(("create", unit_id))
+        return {"token": "pnv_" + "x" * 43, "url": "https://avd.exemple/api/v1/postes/vignettes"}
+
+    def remove_thumbnail(self, unit_id):
+        self.thumbnails.append(("remove", unit_id))
+        return True
 
     def software(self):
         return self.catalogue
@@ -391,6 +408,45 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(gzip.decompress(base64.b64decode(posee["script"])), pilot.WALLPAPER_SCRIPT.read_bytes())
         self.assertEqual(retiree, {"op": "fond", "actif": False})
         self.assertTrue(avd.finished[0][1] and avd.finished[1][1])
+
+    def test_thumbnail_task_sends_token_to_the_installer_only(self):
+        mesh = FakeMesh([PN01])
+        avd = FakeAvd([{**task(action="vignette", id="v1"), "params": {"actif": True}}, {**task(action="vignette", id="v2"), "params": {"actif": False}}])
+        svc = self.service(mesh, avd)
+        svc.tick()
+        svc.tick()
+        posee, retiree = mesh.pilot_ops
+        self.assertEqual((posee["op"], posee["actif"], posee["jeton"]), ("vignette", True, "pnv_" + "x" * 43))
+        self.assertEqual(gzip.decompress(base64.b64decode(posee["script"])), pilot.THUMBNAIL_SCRIPT.read_bytes())
+        self.assertEqual(retiree, {"op": "vignette", "actif": False})
+        self.assertEqual(avd.thumbnails, [("create", "u1"), ("remove", "u1")])
+        self.assertTrue(avd.finished[0][1] and avd.finished[1][1])
+        self.assertNotIn("pnv_", " ".join(self.logs))
+
+    def test_message_is_refused_in_event_mode_unless_forced(self):
+        mesh = FakeMesh([PN01])
+        mesh.event = True
+        avd = FakeAvd([
+            {**task(action="message", id="m1"), "params": {"texte": "Appelez la régie", "genre": "toast", "forcer": False}},
+            {**task(action="message", id="m2"), "params": {"texte": "-- urgent", "titre": "Régie", "genre": "boite", "forcer": True}},
+            {**task(action="message", id="m3"), "params": {"texte": "x" * 501, "forcer": True}},
+        ])
+        svc = self.service(mesh, avd)
+        for _ in range(3):
+            svc.tick()
+        self.assertFalse(avd.finished[0][1])
+        self.assertIn("mode événement", avd.finished[0][2])
+        self.assertEqual(mesh.messages, [("boite", "node//pn01", "-- urgent", "Régie")])
+        self.assertTrue(avd.finished[1][1])
+        self.assertFalse(avd.finished[2][1])
+
+    def test_message_toast_outside_event_mode(self):
+        mesh = FakeMesh([PN01])
+        avd = FakeAvd([{**task(action="message", id="m1"), "params": {"texte": "Pause de 10 minutes"}}])
+        svc = self.service(mesh, avd)
+        svc.tick()
+        self.assertEqual(mesh.messages, [("toast", "node//pn01", "Pause de 10 minutes", "Régie Pointe Noire")])
+        self.assertTrue(avd.finished[0][1])
 
     def test_event_mode_parts(self):
         mesh = FakeMesh([PN01])
