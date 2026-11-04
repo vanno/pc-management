@@ -258,10 +258,16 @@ compressé (gzip puis base64) comme les autres scripts.
 - Mode événement : Windows Update en pause 7 jours (clés `Pause*` de
   `HKLM\SOFTWARE\Microsoft\WindowsUpdate\UX\Settings`), pas de redémarrage
   automatique, veille et extinction d'écran à 0 sur secteur et batterie,
-  notifications coupées (`ToastEnabled` des comptes ouverts). Les réglages
-  d'avant sont gardés dans `C:\ProgramData\PointeNoire\mode-evenement.json`
-  et remis par « Fin du mode événement ». Installer les logiciels est refusé
-  tant que le fichier existe.
+  notifications coupées (`ToastEnabled` et `NOC_GLOBAL_SETTING_TOASTS_ENABLED`
+  des comptes ouverts), conseils et suggestions de Windows coupés
+  (`ContentDeliveryManager`, écran « Tirez le meilleur parti de Windows »).
+  Chaque partie (`windows_update`, `veille`, `notifications`, `conseils`)
+  s'applique ou se rend seule avec le paramètre `parties` ; sans lui, les
+  quatre. Les réglages d'avant sont gardés partie par partie dans
+  `C:\ProgramData\PointeNoire\mode-evenement.json` et remis par « Fin du
+  mode événement ». Le fichier disparaît quand plus aucune partie n'est
+  active. Installer les logiciels est refusé tant qu'il existe. Seuls les
+  comptes ouverts au moment de la commande sont touchés.
 - Réseau : la commande garde la configuration de la carte dans
   `C:\ProgramData\PointeNoire\reseau\avant.json`, puis lance une tâche
   planifiée `PointeNoire-Reseau` (SYSTEM) qui applique la demande et teste
