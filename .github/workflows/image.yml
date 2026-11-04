@@ -40,6 +40,8 @@ jobs:
           context: .
           platforms: linux/amd64
           push: true
+          build-args: |
+            PCM_VERSION=${{ github.sha }}
           tags: |
             ghcr.io/vanno/pc-management:latest
             ghcr.io/vanno/pc-management:${{ github.sha }}

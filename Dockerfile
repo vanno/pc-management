@@ -27,6 +27,10 @@ ENV PYTHONPATH=/app/worker \
     PCM_INSTALLERS=/config/installeurs.json \
     PCM_INSTALLERS_DIR=/installeurs
 
+# Le commit de l'image, posé par le workflow : la page Postes l'affiche.
+ARG PCM_VERSION=dev
+ENV PCM_VERSION=${PCM_VERSION}
+
 USER node
 ENTRYPOINT ["python3", "-m", "pcm"]
 CMD ["devices"]

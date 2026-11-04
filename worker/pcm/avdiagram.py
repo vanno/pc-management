@@ -93,7 +93,11 @@ class AvdClient:
             body["devices"] = devices
         if tool:
             body["tool"] = tool
-        return self._request("POST", "/api/v1/postes/battement", body).get("tasks") or []
+        reply = self._request("POST", "/api/v1/postes/battement", body)
+        # La dernière demande de mise à jour de l'outil faite depuis la page
+        # Postes (0078), à relayer au NAS. Absente d'un AVDiagram plus ancien.
+        self.update_requested_at = reply.get("update_requested_at") or None
+        return reply.get("tasks") or []
 
     def software(self) -> list[dict] | None:
         """Le catalogue de l'onglet Postes, Logiciels (0072). None si cet

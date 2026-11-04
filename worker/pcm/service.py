@@ -14,6 +14,13 @@ Il lance aussi, à heure fixe, l'inventaire de la nuit et les mises à jour de
 la semaine (`planning.py`), et relève chaque jour la version du serveur
 MeshCentral, qu'AVDiagram compare à la dernière publiée.
 
+Le bouton « Mettre à jour l'outil » de la page Postes (0078) revient au
+battement : le service le relaie au NAS en déposant `data/maj-demandee`, que
+la tâche planifiée DSM `scripts/maj-nas.sh --si-demande` (toutes les 5
+minutes) applique. Le conteneur n'a pas accès à Docker : il ne fait que
+déposer la demande. Il remonte sa version, la demande en attente et la
+dernière ligne du journal de mise à jour.
+
 C'est le NAS qui appelle AVDiagram : aucun port n'est ouvert vers lui.
 """
 
@@ -121,6 +128,7 @@ class Service:
         self.tool: dict = {}
         self._version_at: datetime | None = None
         self._plan_failed: dict[str, datetime] = {}
+        self.data_dir = os.path.dirname(os.path.abspath(os.environ.get("PCM_DB", "data/pcm.sqlite")))
         if self.schedules:
             self.tool["schedule"] = {
                 "inventory": (self.schedules.get("inventaire") or None) and self.schedules["inventaire"].label(),
@@ -139,8 +147,10 @@ class Service:
         ]
         self.seen = seen
         self._maintenance(by_tag)
+        self.tool["nas"] = self._nas_state()
         extra = {"tool": self.tool} if self.tool else {}
         tasks = self.avd.heartbeat(SOURCE, seen, limit=self.concurrency, **extra)
+        self._relay_update(getattr(self.avd, "update_requested_at", None))
         if not tasks:
             return 0
         with self._pulse():
@@ -156,6 +166,50 @@ class Service:
                     for f in [pool.submit(self._do_all, g, by_tag) for g in groups.values()]:
                         f.result()
         return len(tasks)
+
+    # -- Mise à jour de l'outil demandée depuis la page Postes (0078) ----------
+
+    def _nas_path(self, name: str) -> str:
+        return os.path.join(self.data_dir, name)
+
+    def _read(self, name: str) -> str | None:
+        try:
+            with open(self._nas_path(name), encoding="utf-8", errors="replace") as f:
+                return f.read()
+        except OSError:
+            return None
+
+    def _nas_state(self) -> dict:
+        """Ce que la page Postes montre de l'outil : sa version (le commit de
+        l'image), la dernière demande relayée, si le NAS ne l'a pas encore
+        appliquée, et la dernière ligne du journal de scripts/maj-nas.sh."""
+        journal = (self._read("maj-nas.log") or "").strip().splitlines()
+        derniere = next((l for l in reversed(journal) if l[:2].isdigit()), None)
+        return {
+            "version": (os.environ.get("PCM_VERSION") or "dev")[:40],
+            "relayed": ((self._read("maj-relayee") or "").strip() or None),
+            "pending": os.path.exists(self._nas_path("maj-demandee")),
+            "last": derniere[:300] if derniere else None,
+        }
+
+    def _relay_update(self, requested_at: str | None) -> None:
+        """Une demande nouvelle : dépose `maj-demandee` pour la tâche DSM.
+        Une demande déjà relayée ne l'est pas deux fois, même après un
+        redémarrage du service (c'est justement ce que fait la mise à jour)."""
+        if not requested_at or not isinstance(requested_at, str) or len(requested_at) > 40:
+            return
+        if (self._read("maj-relayee") or "").strip() == requested_at:
+            return
+        try:
+            with open(self._nas_path("maj-demandee"), "w", encoding="utf-8") as f:
+                f.write(requested_at + "\n")
+            with open(self._nas_path("maj-relayee"), "w", encoding="utf-8") as f:
+                f.write(requested_at + "\n")
+        except OSError as exc:
+            self.log(f"demande de mise à jour non déposée : {exc}")
+            return
+        self.log(f"mise à jour de l'outil demandée ({requested_at}), relayée au NAS")
+        self.tool["nas"] = self._nas_state()
 
     def _do_all(self, tasks: list[dict], by_tag: dict[str, Device]) -> None:
         for task in tasks:
