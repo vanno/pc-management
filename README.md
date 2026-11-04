@@ -87,6 +87,23 @@ Mise en place, une seule fois :
    sh /volume2/docker/pc-management-main/scripts/maj-nas.sh
    ```
 
+4. Pour le bouton « Mettre à jour l'outil » de la page Postes : une seconde
+   tâche, même utilisateur `root`, tous les jours, répétée toutes les
+   5 minutes de 00:00 à 23:55, commande :
+
+   ```bash
+   sh /volume2/docker/pc-management-main/scripts/maj-nas.sh --si-demande
+   ```
+
+   Elle ne fait rien tant qu'aucune mise à jour n'est demandée. Le bouton
+   passe par le battement : `pcm-service` dépose `data/maj-demandee`, la
+   tâche l'applique dans les 5 minutes. Le conteneur n'a jamais accès à
+   Docker. La page Postes affiche la version en service (le commit de
+   l'image) et la dernière ligne de `data/maj-nas.log`.
+
+Pour forcer une mise à jour sans AVDiagram : Planificateur de tâches,
+sélectionner la tâche, Exécuter, ou en SSH `sudo sh scripts/maj-nas.sh`.
+
 Le script relance `pcm-service` seulement si l'image a changé, et note chaque
 passage dans `data/maj-nas.log`. Un redémarrage du worker ne touche aucun
 poste : une tâche en cours est reprise par AVDiagram après son délai. Pour

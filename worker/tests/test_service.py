@@ -378,3 +378,58 @@ class ServiceTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ToolUpdateTests(unittest.TestCase):
+    """Le bouton « Mettre à jour l'outil » de la page Postes (0078)."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.store = Store(Path(self.tmp.name) / "pcm.sqlite")
+        self.logs = []
+        self.data = Path(self.tmp.name)
+
+    def tearDown(self):
+        self.store.db.close()
+        self.tmp.cleanup()
+
+    def service(self, avd):
+        svc = Service(FakeMesh([PN01]), avd, self.store, {}, logger=self.logs.append)
+        svc.data_dir = str(self.data)
+        return svc
+
+    def test_request_is_relayed_once_and_reported(self):
+        avd = FakeAvd()
+        avd.update_requested_at = "2026-11-04T03:10:00.000Z"
+        svc = self.service(avd)
+        svc.tick()
+        self.assertEqual((self.data / "maj-demandee").read_text().strip(), "2026-11-04T03:10:00.000Z")
+        # Le NAS applique la demande et efface le fichier ; le service redémarré ne la relaie pas deux fois.
+        (self.data / "maj-demandee").unlink()
+        (self.data / "maj-nas.log").write_text("2026-11-04 03:12:01 mise à jour à la demande de la page Postes : déjà à jour\n")
+        svc2 = self.service(avd)
+        svc2.tick()
+        self.assertFalse((self.data / "maj-demandee").exists())
+        nas = avd.heartbeats[-1]["tool"]["nas"]
+        self.assertEqual(nas["relayed"], "2026-11-04T03:10:00.000Z")
+        self.assertFalse(nas["pending"])
+        self.assertIn("déjà à jour", nas["last"])
+        self.assertEqual(len([l for l in self.logs if "relayée au NAS" in l]), 1)
+
+    def test_pending_request_is_reported_on_next_beat(self):
+        avd = FakeAvd()
+        avd.update_requested_at = "2026-11-04T03:10:00.000Z"
+        svc = self.service(avd)
+        svc.tick()
+        svc.tick()
+        nas = avd.heartbeats[-1]["tool"]["nas"]
+        self.assertTrue(nas["pending"])
+        self.assertEqual(nas["relayed"], "2026-11-04T03:10:00.000Z")
+        self.assertIsNone(nas["last"])
+
+    def test_older_avdiagram_sends_nothing_to_relay(self):
+        avd = FakeAvd()
+        svc = self.service(avd)
+        svc.tick()
+        self.assertFalse((self.data / "maj-demandee").exists())
+        self.assertEqual(avd.heartbeats[0]["tool"]["nas"]["version"], "dev")
