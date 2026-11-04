@@ -117,58 +117,154 @@ function Get-Comptes {
     @(Get-ChildItem 'Registry::HKEY_USERS' -ErrorAction SilentlyContinue | Where-Object { $_.PSChildName -match '^S-1-5-21-[\d-]+$' } | ForEach-Object { $_.PSChildName })
 }
 
-function Enable-Evenement([int]$Jours) {
-    if (Test-Path $fichierEvenement) {
-        $result.ok = $true
-        $result.detail = 'mode événement déjà actif'
-        return
-    }
-    $avant = [ordered]@{ depuis = (Get-Date).ToString('o'); wu = [ordered]@{}; au = (Get-Valeur $cleAU 'NoAutoRebootWithLoggedOnUsers'); veille = @(); toasts = [ordered]@{} }
-    foreach ($n in $valeursWU) { $avant.wu[$n] = Get-Valeur $cleWU $n }
-    foreach ($r in $reglagesVeille) {
-        $v = Get-Veille $r[0] $r[1]
-        if ($v) { $avant.veille += , [ordered]@{ sous = $r[0]; reglage = $r[1]; ac = $v.ac; dc = $v.dc } }
-    }
-    $comptes = Get-Comptes
-    foreach ($sid in $comptes) {
-        $avant.toasts[$sid] = Get-Valeur "Registry::HKEY_USERS\$sid\Software\Microsoft\Windows\CurrentVersion\PushNotifications" 'ToastEnabled'
-    }
-    if (-not (Test-Path $base)) { New-Item -ItemType Directory -Path $base -Force | Out-Null }
-    # La sauvegarde d'abord : sans elle, pas de retour possible.
-    Write-Utf8 $fichierEvenement ($avant | ConvertTo-Json -Depth 6)
+$toutesParties = @('windows_update', 'veille', 'notifications', 'conseils')
+$cleToast = 'Software\Microsoft\Windows\CurrentVersion\PushNotifications'
+$cleNotif = 'Software\Microsoft\Windows\CurrentVersion\Notifications\Settings'
+$cleCdm = 'Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager'
+$cleScoobe = 'Software\Microsoft\Windows\CurrentVersion\UserProfileEngagement'
+# Conseils, suggestions et « Tirez le meilleur parti de Windows ».
+$valeursConseils = @('SubscribedContent-338389Enabled', 'SubscribedContent-310093Enabled', 'SubscribedContent-338388Enabled', 'SoftLandingEnabled', 'SystemPaneSuggestionsEnabled')
 
-    $debut = (Get-Date).ToUniversalTime()
-    $fin = $debut.AddDays($Jours)
-    $f = 'yyyy-MM-ddTHH:mm:ssZ'
-    foreach ($n in @('PauseUpdatesStartTime', 'PauseFeatureUpdatesStartTime', 'PauseQualityUpdatesStartTime')) { Set-Valeur $cleWU $n $debut.ToString($f) 'String' }
-    foreach ($n in @('PauseUpdatesExpiryTime', 'PauseFeatureUpdatesEndTime', 'PauseQualityUpdatesEndTime')) { Set-Valeur $cleWU $n $fin.ToString($f) 'String' }
-    Set-Valeur $cleAU 'NoAutoRebootWithLoggedOnUsers' 1 'DWord'
-    foreach ($r in $reglagesVeille) { Set-Veille $r[0] $r[1] 0 0 }
-    & powercfg.exe /setactive SCHEME_CURRENT | Out-Null
-    foreach ($sid in $comptes) { Set-Valeur "Registry::HKEY_USERS\$sid\Software\Microsoft\Windows\CurrentVersion\PushNotifications" 'ToastEnabled' 0 'DWord' }
-    $result.ok = $true
-    $result.detail = "mode événement actif : Windows Update en pause jusqu'au $($fin.ToLocalTime().ToString('dd/MM HH:mm')), veille coupée, notifications coupées pour $($comptes.Count) compte(s)"
+function Get-Parties($Demande) {
+    $r = @(@($Demande) | Where-Object { $toutesParties -contains $_ })
+    if (-not $r.Count) { $r = $toutesParties }
+    $r
 }
 
-function Disable-Evenement {
-    if (-not (Test-Path $fichierEvenement)) {
-        $result.ok = $true
-        $result.detail = 'mode événement déjà inactif'
-        return
+# Lit l'état d'avant d'une partie (pour la rendre), puis l'applique.
+function Set-Partie([string]$Partie, $Avant, [int]$Jours) {
+    switch ($Partie) {
+        'windows_update' {
+            $Avant.wu = [ordered]@{}
+            foreach ($n in $valeursWU) { $Avant.wu[$n] = Get-Valeur $cleWU $n }
+            $Avant.au = Get-Valeur $cleAU 'NoAutoRebootWithLoggedOnUsers'
+            $debut = (Get-Date).ToUniversalTime(); $fin = $debut.AddDays($Jours); $f = 'yyyy-MM-ddTHH:mm:ssZ'
+            foreach ($n in @('PauseUpdatesStartTime', 'PauseFeatureUpdatesStartTime', 'PauseQualityUpdatesStartTime')) { Set-Valeur $cleWU $n $debut.ToString($f) 'String' }
+            foreach ($n in @('PauseUpdatesExpiryTime', 'PauseFeatureUpdatesEndTime', 'PauseQualityUpdatesEndTime')) { Set-Valeur $cleWU $n $fin.ToString($f) 'String' }
+            Set-Valeur $cleAU 'NoAutoRebootWithLoggedOnUsers' 1 'DWord'
+            "Windows Update en pause jusqu'au $($fin.ToLocalTime().ToString('dd/MM HH:mm'))"
+        }
+        'veille' {
+            $Avant.veille = @()
+            foreach ($r in $reglagesVeille) {
+                $v = Get-Veille $r[0] $r[1]
+                if ($v) { $Avant.veille += , [ordered]@{ sous = $r[0]; reglage = $r[1]; ac = $v.ac; dc = $v.dc } }
+            }
+            foreach ($r in $reglagesVeille) { Set-Veille $r[0] $r[1] 0 0 }
+            & powercfg.exe /setactive SCHEME_CURRENT | Out-Null
+            'veille coupée'
+        }
+        'notifications' {
+            $Avant.toasts = [ordered]@{}; $Avant.global = [ordered]@{}
+            $comptes = Get-Comptes
+            foreach ($sid in $comptes) {
+                $h = "Registry::HKEY_USERS\$sid"
+                $Avant.toasts[$sid] = Get-Valeur "$h\$cleToast" 'ToastEnabled'
+                $Avant.global[$sid] = Get-Valeur "$h\$cleNotif" 'NOC_GLOBAL_SETTING_TOASTS_ENABLED'
+                Set-Valeur "$h\$cleToast" 'ToastEnabled' 0 'DWord'
+                Set-Valeur "$h\$cleNotif" 'NOC_GLOBAL_SETTING_TOASTS_ENABLED' 0 'DWord'
+            }
+            "notifications coupées pour $($comptes.Count) compte(s)"
+        }
+        'conseils' {
+            $Avant.conseils = [ordered]@{}
+            $comptes = Get-Comptes
+            foreach ($sid in $comptes) {
+                $h = "Registry::HKEY_USERS\$sid"
+                $c = [ordered]@{ scoobe = (Get-Valeur "$h\$cleScoobe" 'ScoobeSystemSettingEnabled') }
+                foreach ($n in $valeursConseils) { $c[$n] = Get-Valeur "$h\$cleCdm" $n; Set-Valeur "$h\$cleCdm" $n 0 'DWord' }
+                Set-Valeur "$h\$cleScoobe" 'ScoobeSystemSettingEnabled' 0 'DWord'
+                $Avant.conseils[$sid] = $c
+            }
+            "conseils Windows coupés pour $($comptes.Count) compte(s)"
+        }
     }
-    $avant = Get-Content -Raw -Path $fichierEvenement | ConvertFrom-Json
-    foreach ($n in $valeursWU) { Set-Valeur $cleWU $n $avant.wu.$n 'String' }
-    Set-Valeur $cleAU 'NoAutoRebootWithLoggedOnUsers' $avant.au 'DWord'
-    foreach ($v in @($avant.veille)) { Set-Veille $v.sous $v.reglage ([long]$v.ac) ([long]$v.dc) }
-    & powercfg.exe /setactive SCHEME_CURRENT | Out-Null
-    $n = 0
-    foreach ($p in $avant.toasts.PSObject.Properties) {
-        $cle = "Registry::HKEY_USERS\$($p.Name)\Software\Microsoft\Windows\CurrentVersion\PushNotifications"
-        if (Test-Path "Registry::HKEY_USERS\$($p.Name)") { Set-Valeur $cle 'ToastEnabled' $p.Value 'DWord'; $n++ }
+}
+
+function Reset-Partie([string]$Partie, $Avant) {
+    switch ($Partie) {
+        'windows_update' {
+            foreach ($n in $valeursWU) { Set-Valeur $cleWU $n $Avant.wu.$n 'String' }
+            Set-Valeur $cleAU 'NoAutoRebootWithLoggedOnUsers' $Avant.au 'DWord'
+            'Windows Update repris'
+        }
+        'veille' {
+            foreach ($v in @($Avant.veille)) { Set-Veille $v.sous $v.reglage ([long]$v.ac) ([long]$v.dc) }
+            & powercfg.exe /setactive SCHEME_CURRENT | Out-Null
+            'veille rendue'
+        }
+        'notifications' {
+            $n = 0
+            foreach ($p in @($Avant.toasts.PSObject.Properties)) {
+                $h = "Registry::HKEY_USERS\$($p.Name)"
+                if (-not (Test-Path $h)) { continue }
+                Set-Valeur "$h\$cleToast" 'ToastEnabled' $p.Value 'DWord'
+                if ($Avant.global) { Set-Valeur "$h\$cleNotif" 'NOC_GLOBAL_SETTING_TOASTS_ENABLED' $Avant.global.($p.Name) 'DWord' }
+                $n++
+            }
+            "notifications rendues pour $n compte(s)"
+        }
+        'conseils' {
+            $n = 0
+            foreach ($p in @($Avant.conseils.PSObject.Properties)) {
+                $h = "Registry::HKEY_USERS\$($p.Name)"
+                if (-not (Test-Path $h)) { continue }
+                foreach ($v in $valeursConseils) { Set-Valeur "$h\$cleCdm" $v $p.Value.$v 'DWord' }
+                Set-Valeur "$h\$cleScoobe" 'ScoobeSystemSettingEnabled' $p.Value.scoobe 'DWord'
+                $n++
+            }
+            "conseils Windows rendus pour $n compte(s)"
+        }
+    }
+}
+
+function Read-Evenement {
+    if (-not (Test-Path $fichierEvenement)) { return $null }
+    $e = Get-Content -Raw -Path $fichierEvenement | ConvertFrom-Json
+    # Avant les parties (lot 2) : les trois d'origine.
+    if (-not $e.parties) { $e | Add-Member -NotePropertyName parties -NotePropertyValue @('windows_update', 'veille', 'notifications') }
+    $e
+}
+
+function Enable-Evenement([int]$Jours, $Demande) {
+    $etat = Read-Evenement
+    if (-not $etat) { $etat = [pscustomobject]@{ depuis = (Get-Date).ToString('o'); parties = @() } }
+    $nouvelles = @(Get-Parties $Demande | Where-Object { @($etat.parties) -notcontains $_ })
+    if (-not $nouvelles.Count) { $result.ok = $true; $result.detail = 'mode événement déjà actif'; return }
+    if (-not (Test-Path $base)) { New-Item -ItemType Directory -Path $base -Force | Out-Null }
+    $faits = @()
+    foreach ($partie in $nouvelles) {
+        $avant = [ordered]@{ wu = $null; au = $null; veille = $null; toasts = $null; global = $null; conseils = $null }
+        $texte = Set-Partie $partie $avant $Jours
+        foreach ($k in @($avant.Keys)) { if ($null -ne $avant[$k]) { $etat | Add-Member -NotePropertyName $k -NotePropertyValue $avant[$k] -Force } }
+        $etat.parties = @(@($etat.parties) + $partie)
+        # La sauvegarde après chaque partie : sans elle, pas de retour possible.
+        Write-Utf8 $fichierEvenement ($etat | ConvertTo-Json -Depth 6)
+        $faits += $texte
+    }
+    $result.ok = $true
+    $result.detail = "mode événement actif : $($faits -join ', ')"
+}
+
+function Disable-Evenement($Demande) {
+    $etat = Read-Evenement
+    if (-not $etat) { $result.ok = $true; $result.detail = 'mode événement déjà inactif'; return }
+    $demandees = @(Get-Parties $Demande)
+    $faits = @()
+    foreach ($partie in @($etat.parties)) {
+        if ($demandees -contains $partie) { $faits += Reset-Partie $partie $etat }
+    }
+    $reste = @(@($etat.parties) | Where-Object { $demandees -notcontains $_ })
+    if ($reste.Count) {
+        $etat.parties = $reste
+        Write-Utf8 $fichierEvenement ($etat | ConvertTo-Json -Depth 6)
+        $result.ok = $true
+        $result.detail = "$($faits -join ', '). Reste actif : $($reste -join ', ')"
+        return
     }
     Remove-Item -Path $fichierEvenement -Force
     $result.ok = $true
-    $result.detail = "poste rendu à la normale (actif depuis le $(([datetime]$avant.depuis).ToString('dd/MM HH:mm'))), notifications rendues pour $n compte(s)"
+    $result.detail = "poste rendu à la normale (actif depuis le $(([datetime]$etat.depuis).ToString('dd/MM HH:mm'))) : $($faits -join ', ')"
 }
 
 # --- Réseau --------------------------------------------------------------------
@@ -648,8 +744,8 @@ try {
             if ($p.actif) {
                 $jours = 7
                 if ($p.jours) { $jours = [Math]::Min(35, [Math]::Max(1, [int]$p.jours)) }
-                Enable-Evenement $jours
-            } else { Disable-Evenement }
+                Enable-Evenement $jours $p.parties
+            } else { Disable-Evenement $p.parties }
         }
         'supervision' { if ($p.actif) { Install-Sonde $p } else { Remove-Sonde } }
         'script' { Invoke-Script $p }

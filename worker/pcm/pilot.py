@@ -190,11 +190,21 @@ def power(mesh: MeshCtrl, device_id: str, params: dict, new_nonce: Callable[[], 
     return bool(reply.get("ok")), detail[:1].upper() + detail[1:]
 
 
+# Les parties du mode événement, dans l'ordre où le poste les applique.
+EVENT_PARTS = ("windows_update", "veille", "notifications", "conseils")
+
+
 def event_mode(mesh: MeshCtrl, device_id: str, params: dict, new_nonce: Callable[[], str], script: str | None = None) -> tuple[bool, str]:
     if not isinstance(params.get("actif"), bool):
         return False, "Paramètre `actif` manquant."
+    body = {"op": "evenement", "actif": params["actif"], "jours": EVENT_DAYS}
+    parties = params.get("parties")
+    if parties is not None:
+        if not isinstance(parties, list) or not parties or any(p not in EVENT_PARTS for p in parties):
+            return False, "Paramètre `parties` invalide."
+        body["parties"] = list(dict.fromkeys(parties))
     try:
-        reply = call(mesh, device_id, {"op": "evenement", "actif": params["actif"], "jours": EVENT_DAYS}, new_nonce, script=script)
+        reply = call(mesh, device_id, body, new_nonce, script=script)
     except (MeshError, PilotError) as exc:
         return False, str(exc)
     detail = reply.get("detail") or ""

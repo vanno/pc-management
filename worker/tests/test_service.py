@@ -377,6 +377,20 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(mesh.pilot_ops[0]["op"], "evenement")
         self.assertEqual(avd.finished[0][1:], (True, "Mode événement actif"))
 
+    def test_event_mode_parts(self):
+        mesh = FakeMesh([PN01])
+        avd = FakeAvd([
+            {**task(action="mode_evenement", id="e1"), "params": {"actif": True, "parties": ["notifications", "conseils", "notifications"]}},
+            {**task(action="mode_evenement", id="e2"), "params": {"actif": True, "parties": ["registre"]}},
+        ])
+        svc = self.service(mesh, avd)
+        svc.tick()
+        svc.tick()
+        self.assertEqual(mesh.pilot_ops[0]["parties"], ["notifications", "conseils"])
+        self.assertEqual(len(mesh.pilot_ops), 1)
+        self.assertFalse(avd.finished[1][1])
+        self.assertIn("parties", avd.finished[1][2])
+
 
 if __name__ == "__main__":
     unittest.main()
