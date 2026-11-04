@@ -12,7 +12,11 @@
              par seconde, calculé sur les compteurs d'octets de la carte ;
              et son réseau (adresse IPv4, préfixe, passerelle, DHCP, profil
              du pare-feu Public ou Privé), pour savoir quels postes partagent
-             un réseau.
+             un réseau ; wired (Ethernet ou non), errors (paquets en erreur
+             reçus et envoyés sur l'intervalle).
+      Une carte filaire tombée depuis moins de 10 minutes part aussi, avec
+      down = true (état dans liens.json) : c'est le seul regard sur le câble
+      quand le switch n'est pas manageable.
 
   Sans réseau, les mesures attendent dans en-attente.json (10 au plus) et
   partent à l'exécution suivante. Un 401 veut dire sonde retirée ou
@@ -24,13 +28,17 @@ $ProgressPreference = 'SilentlyContinue'
 $dir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $conf = Get-Content -Raw -Path (Join-Path $dir 'config.json') | ConvertFrom-Json
 $attente = Join-Path $dir 'en-attente.json'
+$fichierLiens = Join-Path $dir 'liens.json'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
 function Get-Compteurs {
     $r = @{}
     foreach ($a in @(Get-NetAdapter -Physical -ErrorAction SilentlyContinue | Where-Object { $_.Status -eq 'Up' })) {
         $s = Get-NetAdapterStatistics -Name $a.Name -ErrorAction SilentlyContinue
-        if ($s) { $r[$a.Name] = @{ rx = [double]$s.ReceivedBytes; tx = [double]$s.SentBytes; speed = [double]$a.Speed } }
+        if ($s) {
+            $err = [double]$s.ReceivedPacketErrors + [double]$s.OutboundPacketErrors
+            $r[$a.Name] = @{ rx = [double]$s.ReceivedBytes; tx = [double]$s.SentBytes; speed = [double]$a.Speed; err = $err; wired = ([string]$a.PhysicalMediaType -eq '802.3') }
+        }
     }
     $r
 }
@@ -65,6 +73,36 @@ function Measure-Ping([string]$Cible) {
     @{ ms = $ms; loss = [double](100 * (4 - $ok.Count) / 4) }
 }
 
+function Get-LiensCoupes($Actives) {
+    # Une carte filaire vue active puis tombée : gardée 10 minutes, puis
+    # oubliée (un portable retiré de son dock ne reste pas « coupé »).
+    $etat = @{}
+    if (Test-Path $fichierLiens) {
+        try {
+            $lu = Get-Content -Raw -Path $fichierLiens | ConvertFrom-Json
+            foreach ($p in $lu.PSObject.Properties) { $etat[$p.Name] = $p.Value }
+        } catch { $etat = @{} }
+    }
+    $maintenant = (Get-Date).ToUniversalTime()
+    $nouveau = @{}
+    $coupes = @()
+    foreach ($nom in $Actives.Keys) {
+        if ($Actives[$nom].wired) { $nouveau[$nom] = @{ coupe = $null } }
+    }
+    foreach ($nom in $etat.Keys) {
+        if ($nouveau.ContainsKey($nom)) { continue }
+        $a = Get-NetAdapter -Name $nom -Physical -ErrorAction SilentlyContinue
+        if (-not $a -or $a.Status -eq 'Up') { continue }
+        $coupe = $maintenant
+        if ($etat[$nom].coupe) { try { $coupe = [DateTime]::Parse([string]$etat[$nom].coupe).ToUniversalTime() } catch { } }
+        if (($maintenant - $coupe).TotalMinutes -ge 10) { continue }
+        $nouveau[$nom] = @{ coupe = $coupe.ToString('yyyy-MM-ddTHH:mm:ssZ') }
+        $coupes += [ordered]@{ name = $nom; rx = 0; tx = 0; speed = $null; wired = $true; down = $true }
+    }
+    try { [IO.File]::WriteAllText($fichierLiens, (ConvertTo-Json -InputObject $nouveau -Compress), (New-Object System.Text.UTF8Encoding $false)) } catch { }
+    , $coupes
+}
+
 function Get-Mesure($Avant, $Apres, [double]$Secondes) {
     $cpu = $null; $ram = $null; $disque = $null
     try { $cpu = [double](Get-CimInstance Win32_PerfFormattedData_PerfOS_Processor -Filter "Name='_Total'").PercentProcessorTime } catch { }
@@ -86,7 +124,8 @@ function Get-Mesure($Avant, $Apres, [double]$Secondes) {
         $rx = [Math]::Max(0, ($Apres[$nom].rx - $Avant[$nom].rx) * 8 / $Secondes)
         $tx = [Math]::Max(0, ($Apres[$nom].tx - $Avant[$nom].tx) * 8 / $Secondes)
         $n = Get-Reseau $nom
-        $cartes += [ordered]@{ name = $nom; rx = [Math]::Round($rx); tx = [Math]::Round($tx); speed = $Apres[$nom].speed; ipv4 = $n.ipv4; prefix = $n.prefix; gateway = $n.gateway; dhcp = $n.dhcp; profile = $n.profile }
+        $err = [Math]::Max(0, $Apres[$nom].err - $Avant[$nom].err)
+        $cartes += [ordered]@{ name = $nom; rx = [Math]::Round($rx); tx = [Math]::Round($tx); speed = $Apres[$nom].speed; ipv4 = $n.ipv4; prefix = $n.prefix; gateway = $n.gateway; dhcp = $n.dhcp; profile = $n.profile; wired = $Apres[$nom].wired; errors = [long]$err }
     }
     [ordered]@{
         at            = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
@@ -113,6 +152,11 @@ foreach ($k in 1, 2) {
     $mesures += , (Get-Mesure $avant $apres ($maintenant - $t).TotalSeconds)
     $avant = $apres
     $t = $maintenant
+}
+$coupes = Get-LiensCoupes $avant
+if ($coupes.Count -and $mesures.Count) {
+    $derniere = $mesures[$mesures.Count - 1]
+    $derniere.nics = @(@($derniere.nics) + $coupes | Select-Object -First 8)
 }
 
 $envoi = @()
