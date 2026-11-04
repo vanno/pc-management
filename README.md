@@ -59,6 +59,41 @@ Le chemin du partage docker dépend du NAS (sur le DS920+ de l'agence : /volume2
 le droit d'exécuter des commandes. Le jeton AVDiagram se crée dans Profil,
 Jetons d'API, par un membre qui a le droit `parc:ecrire`.
 
+## Mise à jour automatique du NAS
+
+Chaque fusion dans `main` construit l'image du worker sur GitHub (tests
+compris) et la publie sur `ghcr.io/vanno/pc-management` (`latest` et le
+numéro de commit). Le NAS la récupère seul la nuit : plus de ZIP à copier.
+
+Mise en place, une seule fois :
+
+1. Si le dépôt est privé, l'image l'est aussi. Créer sur GitHub un jeton
+   classique avec le seul droit `read:packages`, puis sur le NAS, en root :
+
+   ```bash
+   docker login ghcr.io -u vanno
+   ```
+
+   (coller le jeton comme mot de passe ; il est gardé dans
+   `/root/.docker/config.json`).
+2. Copier une dernière fois `docker-compose.yml` et `scripts/` de main dans
+   `/volume2/docker/pc-management-main`, puis lancer
+   `sh scripts/maj-nas.sh` une fois à la main pour vérifier.
+3. DSM, Panneau de configuration, Planificateur de tâches : Créer, Tâche
+   planifiée, Script défini par l'utilisateur, utilisateur `root`, tous les
+   jours à 04:30, commande :
+
+   ```bash
+   sh /volume2/docker/pc-management-main/scripts/maj-nas.sh
+   ```
+
+Le script relance `pcm-service` seulement si l'image a changé, et note chaque
+passage dans `data/maj-nas.log`. Un redémarrage du worker ne touche aucun
+poste : une tâche en cours est reprise par AVDiagram après son délai. Pour
+revenir à une version précise : `PCM_IMAGE=ghcr.io/vanno/pc-management:<commit>`
+dans `.env`, puis `docker compose up -d pcm-service`. `docker compose build`
+reste possible pour un essai local.
+
 ## Service de la page Postes
 
 ```bash
