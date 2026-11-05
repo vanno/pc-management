@@ -312,7 +312,7 @@ function Get-Releve($s) {
 
     # Services : prise en main, son, et ceux du matériel de production.
     $sv = @(Get-Service -ErrorAction SilentlyContinue)
-    foreach ($x in @(@('Mesh Agent', 'Prise en main à distance', 'alerte'), @('Audiosrv', 'Son Windows', 'alerte'), @('WSearch', 'Recherche Windows', ''))) {
+    foreach ($x in @(@('Mesh Agent', 'Prise en main à distance', 'alerte'), @('Audiosrv', 'Son Windows', 'alerte'))) {
         $o = @($sv | Where-Object { $_.Name -eq $x[0] })
         if (-not $o.Count) { continue }
         if ($o[0].Status -eq 'Running') { Add-Ligne 'Services' "$($x[1]) : en marche" $(if ($x[2]) { 'ok' } else { 'neutre' }) }
@@ -396,28 +396,56 @@ function Show-Evenement($g, [int]$l, [int]$h, $s, $r, [string]$Libelle) {
         $yy += 32 * $k
     }
     $y += $haut + 14 * $k
-    # Les colonnes.
+    # Les colonnes : les sections gardent leur ordre et se répartissent pour que
+    # la plus haute des trois colonnes soit la plus basse possible. Ce qui ne
+    # tient pas est compté en bas de la colonne, jamais perdu sans le dire.
     $titre = & $police 14 $true; $ecrit = & $police 18 $false
     $gris = & $pinceau ([Drawing.Color]::FromArgb(160, 160, 160))
     $cw = [float](($pw - 2 * 14 * $k) / 3)
-    $colonnes = @(@('Réseau', 'Écrans et son'), @('Machine', 'Services'), @('Logiciels du direct', 'Protections', 'Dernières actions'))
     $g.FillRectangle($fond, $x0, $y, $pw, [float]($bas - $y))
+    $blocs = @(foreach ($nom in 'Réseau', 'Écrans et son', 'Machine', 'Services', 'Logiciels du direct', 'Protections', 'Dernières actions') {
+        if (-not $r.sections.Contains($nom)) { continue }
+        $lignesBloc = @(foreach ($ligne in $r.sections[$nom]) {
+            [pscustomobject]@{ t = $ligne.t; n = $ligne.n; m = @(Split-Texte $g $ligne.t $ecrit ($cw - 48 * $k)) }
+        })
+        $rangs = 0; foreach ($x in $lignesBloc) { $rangs += $x.m.Count }
+        [pscustomobject]@{ nom = $nom; lignes = $lignesBloc; h = 46 + 27 * $rangs }
+    })
+    $nb = $blocs.Count; $coupes = @(0, 0); $pire = [double]::MaxValue
+    for ($a = 0; $a -le $nb; $a++) {
+        for ($b = $a; $b -le $nb; $b++) {
+            $hc = @(0, 0, 0)
+            for ($i = 0; $i -lt $nb; $i++) { $hc[$(if ($i -lt $a) { 0 } elseif ($i -lt $b) { 1 } else { 2 })] += $blocs[$i].h }
+            $max = ($hc | Measure-Object -Maximum).Maximum
+            if ($max -lt $pire) { $pire = $max; $coupes = @($a, $b) }
+        }
+    }
+    $fin = $bas - 7 * $k
     for ($c = 0; $c -lt 3; $c++) {
         $cx = [float]($x0 + $c * ($cw + 14 * $k) + 22 * $k); $cy = $y + 16 * $k
-        foreach ($nom in $colonnes[$c]) {
-            if (-not $r.sections.Contains($nom) -or $cy -gt $bas - 60 * $k) { continue }
-            $g.DrawString($nom.ToUpper(), $titre, $gris, $cx, [float]$cy)
+        $de = @(0, $coupes[0], $coupes[1])[$c]; $jusque = @($coupes[0], $coupes[1], $nb)[$c]
+        $restantes = 0; for ($i = $de; $i -lt $jusque; $i++) { $restantes += $blocs[$i].lignes.Count }
+        $plein = $false
+        for ($i = $de; $i -lt $jusque -and -not $plein; $i++) {
+            # Un titre ne descend que si une ligne tient dessous, avec la place du compte s'il en reste.
+            if ($fin - $cy -lt (28 + 27 * $(if ($restantes -gt 1) { 2 } else { 1 })) * $k) { $plein = $true; break }
+            $g.DrawString($blocs[$i].nom.ToUpper(), $titre, $gris, $cx, [float]$cy)
             $cy += 28 * $k
-            foreach ($ligne in $r.sections[$nom]) {
-                # Ce qui reste de place en bas : la ligne se raccourcit plutôt que de disparaître.
-                $place = [int][Math]::Floor(($bas - 7 * $k - $cy) / (27 * $k))
-                if ($place -lt 1) { break }
-                $morceaux = @(Split-Texte $g $ligne.t $ecrit ($cw - 48 * $k) ([Math]::Min(3, $place)))
+            foreach ($ligne in $blocs[$i].lignes) {
+                $place = [int][Math]::Floor(($fin - $cy) / (27 * $k)) - $(if ($restantes -gt 1) { 1 } else { 0 })
+                if ($place -lt 1) { $plein = $true; break }
+                $morceaux = $ligne.m
+                if ($morceaux.Count -gt $place) { $morceaux = @(Split-Texte $g $ligne.t $ecrit ($cw - 48 * $k) $place) }
                 $g.FillEllipse((& $pinceau $couleur[$ligne.n]), $cx, [float]($cy + 8 * $k), [float](9 * $k), [float](9 * $k))
                 $encreLigne = $(if ($ligne.n -in 'attention', 'alerte') { & $pinceau $couleur[$ligne.n] } else { $clair })
                 foreach ($m in $morceaux) { $g.DrawString($m, $ecrit, $encreLigne, [float]($cx + 18 * $k), [float]$cy); $cy += 27 * $k }
+                $restantes--
             }
             $cy += 18 * $k
+        }
+        if ($restantes -gt 0) {
+            $compte = "+ $restantes $(if ($restantes -gt 1) { 'lignes' } else { 'ligne' }) sur la page « État du poste »"
+            $g.DrawString((Get-Ajuste $g $compte $ecrit ($cw - 30 * $k)), $ecrit, $gris, $cx, [float][Math]::Min($cy, $fin - 27 * $k))
         }
     }
 }

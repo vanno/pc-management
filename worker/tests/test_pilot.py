@@ -454,6 +454,10 @@ class AgentScriptTests(unittest.TestCase):
         self.assertIn('$codeLogo = @"', fond)
         self.assertIn("try {\n        if (-not ('PointeNoire.Logo' -as [type]))", releve)
         self.assertIn("IP publique", releve)
+        # Ce qui ne tient pas dans une colonne est compté, jamais perdu sans le dire.
+        self.assertIn("sur la page « État du poste »", releve)
+        self.assertIn("$coupes = @($a, $b)", releve)
+        self.assertNotIn("WSearch", releve)
         self.assertNotIn("à peine lisible", fond)
         self.assertIn("'Réussi' } else { 'Échec' }", fond)
         self.assertIn("historique", pilote)
