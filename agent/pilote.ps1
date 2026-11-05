@@ -126,6 +126,12 @@ $cleScoobe = 'Software\Microsoft\Windows\CurrentVersion\UserProfileEngagement'
 # Conseils, suggestions et « Tirez le meilleur parti de Windows ».
 $valeursConseils = @('SubscribedContent-338389Enabled', 'SubscribedContent-310093Enabled', 'SubscribedContent-338388Enabled', 'SoftLandingEnabled', 'SystemPaneSuggestionsEnabled')
 
+function Read-Fond {
+    $f = Join-Path $base 'fond\etat.json'
+    if (-not (Test-Path $f)) { return $null }
+    try { Get-Content -Raw -Encoding UTF8 $f | ConvertFrom-Json } catch { $null }
+}
+
 function Get-Parties($Demande) {
     $r = @(@($Demande) | Where-Object { $toutesParties -contains $_ })
     if (-not $r.Count) { $r = $toutesParties }
@@ -157,7 +163,7 @@ function Set-Partie([string]$Partie, $Avant, [int]$Jours) {
         }
         'notifications' {
             $Avant.toasts = [ordered]@{}; $Avant.global = [ordered]@{}
-            $comptes = Get-Comptes
+            $comptes = @(Get-Comptes)
             foreach ($sid in $comptes) {
                 $h = "Registry::HKEY_USERS\$sid"
                 $Avant.toasts[$sid] = Get-Valeur "$h\$cleToast" 'ToastEnabled'
@@ -169,7 +175,7 @@ function Set-Partie([string]$Partie, $Avant, [int]$Jours) {
         }
         'conseils' {
             $Avant.conseils = [ordered]@{}
-            $comptes = Get-Comptes
+            $comptes = @(Get-Comptes)
             foreach ($sid in $comptes) {
                 $h = "Registry::HKEY_USERS\$sid"
                 $c = [ordered]@{ scoobe = (Get-Valeur "$h\$cleScoobe" 'ScoobeSystemSettingEnabled') }
@@ -179,8 +185,15 @@ function Set-Partie([string]$Partie, $Avant, [int]$Jours) {
             }
             "conseils Windows coupés pour $($comptes.Count) compte(s)"
         }
-        # Le fond d'état (fond.ps1) passe au noir : il lit les parties actives.
-        'fond' { 'fond d''écran noir' }
+        # Le fond d'état (fond.ps1) lit les parties actives : écran noir et
+        # « MODE ÉVÉNEMENT ». Sans fond d'état, le relais le pose (fond_a_poser)
+        # et Reset-Partie le retire à la fin.
+        'fond' {
+            $e = Read-Fond
+            $Avant.fond = [bool]($e -and -not $e.retire)
+            if (-not $Avant.fond) { $result.fond_a_poser = $true }
+            'écran « Mode événement »'
+        }
     }
 }
 
@@ -218,7 +231,21 @@ function Reset-Partie([string]$Partie, $Avant) {
             }
             "conseils Windows rendus pour $n compte(s)"
         }
-        'fond' { 'fond d''écran rendu' }
+        'fond' {
+            if ($Avant.fond -ne $false) { 'écran rendu' }
+            else {
+                # Posé pour l'événement seulement : retiré, chaque compte retrouve son fond.
+                $f = Join-Path $base 'fond\etat.json'
+                $e = Read-Fond
+                if ($e -and -not $e.retire) {
+                    $e | Add-Member -NotePropertyName retire -NotePropertyValue $true -Force
+                    $e | Add-Member -NotePropertyName retireLe -NotePropertyValue (Get-Date).ToString('o') -Force
+                    Write-Utf8 $f ($e | ConvertTo-Json -Depth 4)
+                    Remove-Item (Join-Path $env:PUBLIC 'Desktop\État du poste.lnk') -Force -ErrorAction SilentlyContinue
+                }
+                'état de l''écran retiré (posé pour l''événement)'
+            }
+        }
     }
 }
 
@@ -238,7 +265,7 @@ function Enable-Evenement([int]$Jours, $Demande) {
     if (-not (Test-Path $base)) { New-Item -ItemType Directory -Path $base -Force | Out-Null }
     $faits = @()
     foreach ($partie in $nouvelles) {
-        $avant = [ordered]@{ wu = $null; au = $null; veille = $null; toasts = $null; global = $null; conseils = $null }
+        $avant = [ordered]@{ wu = $null; au = $null; veille = $null; toasts = $null; global = $null; conseils = $null; fond = $null }
         $texte = Set-Partie $partie $avant $Jours
         foreach ($k in @($avant.Keys)) { if ($null -ne $avant[$k]) { $etat | Add-Member -NotePropertyName $k -NotePropertyValue $avant[$k] -Force } }
         $etat.parties = @(@($etat.parties) + $partie)
@@ -633,36 +660,47 @@ function Enable-Nettoyage([bool]$Applications) {
     Write-Utf8 $fichierNettoyage ($etat | ConvertTo-Json -Depth 6)
 
     $plan = Set-PlanProduction $etat
+    # Chaque refus de Windows est nommé, et le reste s'applique quand même.
+    $refus = @()
     $services = 0
     foreach ($n in @($etat.services.Keys)) {
-        Set-Valeur (Join-Path $cleServices $n) 'Start' 4 'DWord'
+        try { Set-Valeur (Join-Path $cleServices $n) 'Start' 4 'DWord'; $services++ } catch { $refus += "service $n ($($_.Exception.Message))" }
         Stop-Service -Name $n -Force -ErrorAction SilentlyContinue
-        $services++
     }
     $taches = 0
     foreach ($t in @($etat.taches.Keys)) {
         $i = $t.LastIndexOf('\')
-        Disable-ScheduledTask -TaskPath $t.Substring(0, $i + 1) -TaskName $t.Substring($i + 1) -ErrorAction SilentlyContinue | Out-Null
-        $taches++
+        try { Disable-ScheduledTask -TaskPath $t.Substring(0, $i + 1) -TaskName $t.Substring($i + 1) -ErrorAction Stop | Out-Null; $taches++ } catch { $refus += "tâche $($t.Substring($i + 1))" }
     }
-    foreach ($r in $reglagesNettoyage) { Set-Valeur $r[0] $r[1] $r[2] 'DWord' }
+    $reglages = 0
+    foreach ($r in $reglagesNettoyage) {
+        try { Set-Valeur $r[0] $r[1] $r[2] 'DWord'; $reglages++ } catch { $refus += "réglage $($r[1]) ($($_.Exception.Message))" }
+    }
     $retirees = @()
+    $sansListe = $null
     if ($Applications) {
+        # La liste des applications installées, une seule fois : Windows peut la refuser.
+        try {
+            $installees = @(Get-AppxPackage -AllUsers -ErrorAction Stop)
+            $prevues = @(Get-AppxProvisionedPackage -Online -ErrorAction Stop)
+        } catch { $sansListe = $_.Exception.Message; $installees = @(); $prevues = @() }
         foreach ($a in $applicationsNettoyage) {
-            foreach ($pkg in @(Get-AppxPackage -AllUsers -Name $a -ErrorAction SilentlyContinue)) {
-                try { Remove-AppxPackage -Package $pkg.PackageFullName -AllUsers -ErrorAction Stop; $retirees += $pkg.Name } catch { }
+            foreach ($pkg in @($installees | Where-Object { $_.Name -like $a })) {
+                try { Remove-AppxPackage -Package $pkg.PackageFullName -AllUsers -ErrorAction Stop; $retirees += $pkg.Name } catch { $refus += "application $($pkg.Name)" }
             }
-            foreach ($prov in @(Get-AppxProvisionedPackage -Online -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -like $a })) {
+            foreach ($prov in @($prevues | Where-Object { $_.DisplayName -like $a })) {
                 try { Remove-AppxProvisionedPackage -Online -PackageName $prov.PackageName -ErrorAction Stop | Out-Null; $retirees += $prov.DisplayName } catch { }
             }
         }
         $etat.applications = @(@($etat.applications) + $retirees | Where-Object { $_ } | Sort-Object -Unique)
         Write-Utf8 $fichierNettoyage ($etat | ConvertTo-Json -Depth 6)
     }
-    $result.ok = $true
+    $result.ok = -not $sansListe
     $result.applications = @($retirees | Sort-Object -Unique)
-    $txt = "profil appliqué : $plan, $services service(s) et $taches tâche(s) coupés, $($reglagesNettoyage.Count) réglages posés"
+    $txt = "profil appliqué : $plan, $services service(s) et $taches tâche(s) coupés, $reglages réglages posés"
     if ($Applications) { $txt += ", $(@($result.applications).Count) application(s) retirée(s)" }
+    if ($sansListe) { $txt += ". Applications pas retirées : Windows refuse d'en donner la liste ($sansListe)" }
+    if ($refus.Count) { $txt += ". Refusé par Windows : $($refus -join ', ')" }
     $result.detail = $txt + '. Le démarrage rapide est coupé : effet complet au prochain redémarrage'
 }
 
@@ -736,7 +774,15 @@ function Update-Fond {
         }
         $t = "$($result.op) : $($result.detail)"
         if ($t.Length -gt 90) { $t = $t.Substring(0, 89) + '…' }
-        $e | Add-Member -NotePropertyName derniere -NotePropertyValue ([ordered]@{ texte = $t; le = (Get-Date).ToString('o') }) -Force
+        $le = (Get-Date).ToString('o')
+        $e | Add-Member -NotePropertyName derniere -NotePropertyValue ([ordered]@{ texte = $t; le = $le }) -Force
+        # Les cinq dernières actions, réussies ou non, pour l'écran du poste.
+        $d = ([string]$result.detail -split '\. ', 2)[0] -replace '^mode événement ', ''
+        $nom = @{ evenement = 'Mode événement'; nettoyage = 'Allègement'; supervision = 'Suivi'; alimentation = 'Alimentation'; reseau = 'Réseau'; script = 'Script'; fichier = 'Fichier' }[[string]$result.op]
+        if (-not $nom) { $nom = [string]$result.op }
+        $h = "${nom} : $d"
+        if ($h.Length -gt 70) { $h = $h.Substring(0, 69) + '…' }
+        $e | Add-Member -NotePropertyName historique -NotePropertyValue (@(@([ordered]@{ op = [string]$result.op; texte = $h; ok = [bool]$result.ok; le = $le }) + @($e.historique | Where-Object { $_ }) | Select-Object -First 5)) -Force
         $e | Add-Member -NotePropertyName sonde -NotePropertyValue (Test-Path (Join-Path $dossierSonde 'config.json')) -Force
         Write-Utf8 $f ($e | ConvertTo-Json -Depth 4)
         Start-ScheduledTask -TaskName 'PointeNoire-Fond' -ErrorAction SilentlyContinue
@@ -792,7 +838,8 @@ try {
     }
 } catch {
     $result.ok = $false
-    $result.detail = $_.Exception.Message
+    $i = $_.InvocationInfo
+    $result.detail = "$($_.Exception.Message) (pilote.ps1, ligne $($i.ScriptLineNumber)$(if ($i.MyCommand) { ", $($i.MyCommand.Name)" }))"
 }
 Update-Fond
 Send-Result

@@ -270,10 +270,17 @@ compressé (gzip puis base64) comme les autres scripts.
   comptes ouverts au moment de la commande sont touchés.
 - Fond d'état (`agent/fond.ps1`, posé par `agent/fond-pose.ps1`) : sur
   l'écran principal, la référence, les cartes (IP, profil, débit), le mode
-  événement partie par partie, le nettoyage, la sonde et la dernière commande ;
-  gris en temps normal, orange en mode événement partiel, rouge complet. Les
-  autres écrans sont noirs : rien ne part vers un projecteur ou un mur LED. La
-  partie `fond` du mode événement met tout au noir, la référence en petit.
+  événement partie par partie, le nettoyage, la sonde et les cinq dernières
+  actions, chacune « Réussi » (vert) ou « Échec » (rouge) ; gris en temps
+  normal, orange en mode événement partiel, rouge complet. Les autres écrans
+  sont noirs : rien ne part vers un projecteur ou un mur LED. La partie
+  `fond` du mode événement affiche « MODE ÉVÉNEMENT » en grand, depuis quand,
+  ce qui est coupé et les trois dernières actions, sans le détail réseau :
+  l'opérateur sait toujours dans quel mode il est. Sans fond d'état sur le
+  poste, le relais le pose en même temps (`fond_a_poser`), et le poste le
+  retire à la fin du mode ; le retrait à la main est refusé pendant le mode.
+  L'historique vient de `pilote.ps1` (`historique` dans `fond\etat.json`) ;
+  `controle.ps1` y fait passer en échec l'action que Windows n'a pas appliquée.
   Une tâche PointeNoire-Fond (groupe Utilisateurs, par `wscript` pour
   qu'aucune fenêtre ne s'ouvre) le redessine à l'ouverture de session, toutes
   les 15 minutes et après chaque commande du pilote. L'icône « État du poste »
@@ -324,7 +331,7 @@ partie (`nom`, `ok`, `constat`), que la tâche AVDiagram garde dans `controle` :
 | Veille | `powercfg /q` du plan actif, et une stratégie de groupe qui imposerait une durée (`Policies\Microsoft\Power\PowerSettings`) |
 | Notifications | le registre de chaque compte, puis Windows lui-même dans chaque session ouverte (`ToastNotificationManager`, réglage `DisabledForUser`) |
 | Conseils Windows | le registre de chaque compte |
-| Fond noir | la tâche PointeNoire-Fond relancée, le bilan de chaque session (`noir`) |
+| Écran « Mode événement » | la tâche PointeNoire-Fond relancée, le bilan de chaque session (`noir`) |
 | Nettoyage | plan actif, services (désactivés et arrêtés), tâches, réglages, applications encore installées |
 | Sonde | son premier passage (10 s après la pose), son code de sortie, aucune mesure en attente |
 
@@ -341,6 +348,12 @@ ce qui manque) ou `non_verifie` (contrôle impossible, aucune session ouverte,
 ou un point illisible). Un compte dont la session s'est fermée pendant
 l'événement ne retrouve pas ses notifications ni ses conseils au retour : le
 contrôle le signale.
+
+Windows PowerShell 5.1 rend seul l'objet d'une liste qui n'en compte qu'un, et
+un `[pscustomobject]` seul n'y a pas de `.Count` : `$x = Get-Sessions` puis
+`$x.Count` y vaut rien, et un seul compte ouvert passait pour « aucune
+session ». Ces listes s'écrivent `$x = @(Get-Sessions …)`, ce que
+`AgentScriptTests` vérifie dans tous les scripts.
 
 Le battement envoie aussi, pour chaque poste, le lien vers sa page MeshCentral
 (`https://<hôte>/?gotonode=<id>&viewmode=11`) : la page Postes l’affiche en
@@ -420,7 +433,10 @@ L'action « Nettoyer » de la page Postes applique un profil de production, et
 « Annuler le nettoyage » remet le poste comme avant. L'état d'origine est
 écrit sur le poste avant tout changement, dans
 `C:\ProgramData\PointeNoire\nettoyage.json` ; une seconde application garde
-l'état de la première.
+l'état de la première. Chaque écriture refusée par Windows est nommée dans le
+résultat (« Refusé par Windows : service …, réglage … ») et le reste
+s'applique. Si Windows refuse la liste des applications, la désinstallation
+passe en échec en le disant, le profil restant appliqué.
 
 | Partie | Effet | Annulation |
 |---|---|---|

@@ -29,6 +29,7 @@ class FakeMesh:
         self.winget_codes = {}
         self.event = False
         self.pilot_ops = []
+        self.screen_to_pose = False
         self.woken = []
         self.messages = []
         self.check_points = [{"nom": "Veille", "ok": True, "constat": "jamais"}]
@@ -72,6 +73,10 @@ class FakeMesh:
                 return pnpl_reply(nonce, op="controle", ok=True, detail="", points=self.check_points)
             if params["op"] == "diagnostic":
                 return pnpl_reply(nonce, op="diagnostic", ok=True, detail="Ethernet 192.168.1.20/24 ; ports : 4/4 joignables", diagnostic={"poste": "PN01", "cartes": []})
+            if params["op"] == "evenement" and self.screen_to_pose:
+                return pnpl_reply(nonce, op="evenement", ok=True, detail="mode événement actif : écran « Mode événement »", fond_a_poser=True)
+            if params["op"] == "fond":
+                return pnpl_reply(nonce, op="fond", ok=True, detail="fond d'état posé. Session de vannh : affiché sur 1 écran(s)", points=[])
             return pnpl_reply(nonce, op=params["op"], ok=True, detail="mode événement actif")
         if "$env:PNWG_NONCE='" in command:
             nonce = command.split("$env:PNWG_NONCE='", 1)[1].split("'", 1)[0]
@@ -403,6 +408,18 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(mesh.pilot_ops[1], {"op": "controle", "quoi": "evenement", "actif": True})
         self.assertEqual(avd.finished[0][1:], (True, "Mode événement actif"))
         self.assertEqual(avd.controles[0], {"etat": "verifie", "points": [{"nom": "Veille", "ok": True, "constat": "jamais"}]})
+
+    def test_event_mode_poses_the_screen_state_when_missing(self):
+        """L'écran dit « MODE ÉVÉNEMENT » : sans fond d'état, le relais le pose avant le contrôle."""
+        mesh = FakeMesh([PN01])
+        mesh.screen_to_pose = True
+        avd = FakeAvd([{**task(action="mode_evenement"), "params": {"actif": True}}])
+        self.service(mesh, avd).tick()
+        self.assertEqual([o["op"] for o in mesh.pilot_ops], ["evenement", "fond", "controle"])
+        self.assertEqual((mesh.pilot_ops[1]["actif"], mesh.pilot_ops[1]["reference"]), (True, "PN01"))
+        (_, ok, result), = avd.finished
+        self.assertTrue(ok)
+        self.assertEqual(result, "Mode événement actif : écran « Mode événement ». État de l'écran posé pour l'événement : fond d'état posé. Session de vannh : affiché sur 1 écran(s)")
 
     def test_event_mode_not_applied_in_windows_fails(self):
         mesh = FakeMesh([PN01])

@@ -47,7 +47,8 @@ class FakeMesh:
 class CommandTests(unittest.TestCase):
     def test_script_travels_compressed(self):
         cmd = pilot.build_command({"op": "etat"}, "ab12")
-        self.assertLess(len(cmd), 16_000)
+        # Comme le fond : la sonde passe à 22 100 caractères en production.
+        self.assertLess(len(cmd), 18_000)
         packed = re.search(r"FromBase64String\('([^']+)'\)\);\$g", cmd).group(1)
         self.assertEqual(gzip.decompress(base64.b64decode(packed)).decode("utf-8"), pilot.AGENT_SCRIPT.read_text(encoding="utf-8"))
         self.assertEqual(pilot_params(cmd), ("ab12", {"op": "etat"}))
@@ -364,6 +365,19 @@ class CheckTests(unittest.TestCase):
         self.assertEqual((controle["etat"], controle["raison"]), ("non_verifie", "Aucune session ouverte sur le poste : rien à relire."))
         self.assertEqual(len(pilot.wallpaper(mesh, "n", "PN09", {"actif": False}, nonces(), script="'x'")), 2)
 
+    def test_event_mode_screen_not_posed_is_said(self):
+        mesh = FakeMesh({
+            "evenement": [{"ok": True, "detail": "mode événement actif : veille coupée", "fond_a_poser": True}, {"ok": True, "detail": "mode événement déjà actif"}],
+            "fond": [{"ok": False, "detail": "fond d'état pas affiché. Session de vannh : échec, accès refusé", "points": []}],
+        })
+        ok, text = pilot.event_mode(mesh, "n", {"actif": True}, nonces(), script="'x'", reference="PN09", wallpaper_script="'y'")
+        self.assertTrue(ok)
+        self.assertEqual(text, "Mode événement actif : veille coupée. État de l'écran pas posé : Fond d'état pas affiché. Session de vannh : échec, accès refusé")
+        self.assertEqual(mesh.calls[1][0]["reference"], "PN09")
+        # Sans `fond_a_poser`, rien d'autre ne part.
+        self.assertEqual(pilot.event_mode(mesh, "n", {"actif": True}, nonces(), script="'x'"), (True, "Mode événement déjà actif"))
+        self.assertEqual(len(mesh.calls), 3)
+
     def test_check_script_reads_what_the_pilot_writes(self):
         """controle.ps1 relit les mêmes réglages que ceux que pilote.ps1 pose."""
         pilote = pilot.AGENT_SCRIPT.read_text(encoding="utf-8")
@@ -388,3 +402,56 @@ class CheckTests(unittest.TestCase):
         # Sa seule écriture : la tâche temporaire de lecture dans les sessions, retirée aussitôt.
         self.assertEqual(text.count("Register-ScheduledTask"), 1)
         self.assertIn("Unregister-ScheduledTask -TaskName $tacheSonde", text)
+
+
+class AgentScriptTests(unittest.TestCase):
+    """Ce que les scripts du poste doivent tenir, faute de Windows pour les essayer ici."""
+
+    SCRIPTS = sorted((pilot.AGENT_SCRIPT.parent).glob("*.ps1"))
+
+    def test_lists_of_objects_are_kept_as_arrays(self):
+        """Windows PowerShell 5.1 : une fonction qui rend une liste d'un seul
+        [pscustomobject] le rend seul, et cet objet n'a pas de .Count (corrigé
+        en PowerShell 6.1 seulement). `$x = Get-Liste` puis `$x.Count` vaut
+        alors rien : PN09 avec un seul compte ouvert passait pour « aucune
+        session ». Toute affectation d'une telle fonction passe par @()."""
+        for path in self.SCRIPTS:
+            text = path.read_text(encoding="utf-8-sig")
+            lists = set()
+            for m in re.finditer(r"^function ([\w-]+)[^\n]*\{\n(.*?)^\}", text, re.M | re.S):
+                body = [line.strip() for line in m.group(2).splitlines() if line.strip()]
+                if body and body[-1].startswith("@(") and "[pscustomobject]" in m.group(2):
+                    lists.add(m.group(1))
+            for m in re.finditer(r"\$\w+\s*=\s*([\w-]+)\b", text):
+                self.assertNotIn(m.group(1), lists, f"{path.name} ligne {text.count(chr(10), 0, m.start()) + 1} : {m.group(0)} sans @()")
+
+    def test_screen_says_event_mode_and_last_actions(self):
+        fond = pilot.WALLPAPER_SCRIPT.read_text(encoding="utf-8")
+        pilote = pilot.AGENT_SCRIPT.read_text(encoding="utf-8")
+        controle = pilot.CHECK_SCRIPT.read_text(encoding="utf-8")
+        # Plus de fond noir muet : l'étiquette en grand, et les actions réussies ou non.
+        self.assertIn("$ton[0].ToUpper()", fond)
+        self.assertIn("Get-LignesEvenement", fond)
+        self.assertNotIn("à peine lisible", fond)
+        self.assertIn("'Réussi' } else { 'Échec' }", fond)
+        self.assertIn("historique", pilote)
+        # Le contrôle fait passer en échec, à l'écran, ce que Windows n'a pas appliqué.
+        self.assertIn("Update-Historique", controle)
+        # Posé pour l'événement, retiré à sa fin ; pas de retrait à la main pendant.
+        self.assertIn("$result.fond_a_poser = $true", pilote)
+        self.assertIn("posé pour l''événement", pilote)
+        self.assertIn("son écran l''indique jusqu''à la fin du mode", pilot.WALLPAPER_INSTALLER.read_text(encoding="utf-8"))
+
+    def test_cleanup_names_what_windows_refuses(self):
+        """« Tentative d'exécution d'une opération non autorisée » sans plus :
+        chaque écriture du nettoyage est gardée, et son refus nommé."""
+        pilote = pilot.AGENT_SCRIPT.read_text(encoding="utf-8")
+        corps = pilote.split("function Enable-Nettoyage", 1)[1].split("\nfunction ", 1)[0]
+        lines = corps.splitlines()
+        for i, line in enumerate(lines):
+            if re.search(r"Set-Valeur|Disable-ScheduledTask|Remove-AppxPackage|Get-AppxPackage", line):
+                gardee = "try {" in line or any(l.strip() == "try {" for l in lines[max(0, i - 2):i])
+                self.assertTrue(gardee, line.strip())
+        self.assertIn("Refusé par Windows", corps)
+        # Une erreur imprévue dit sa ligne et sa commande.
+        self.assertIn("pilote.ps1, ligne $($i.ScriptLineNumber)", pilote)
