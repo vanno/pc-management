@@ -61,7 +61,9 @@ function Get-Image {
     $x = [PointeNoire.Session]::GetSystemMetrics(76); $y = [PointeNoire.Session]::GetSystemMetrics(77)
     $l = [PointeNoire.Session]::GetSystemMetrics(78); $h = [PointeNoire.Session]::GetSystemMetrics(79)
     if ($l -le 0 -or $h -le 0) { throw 'écran introuvable' }
-    $k = [Math]::Min([Math]::Min(1920 / $l, 540 / $h), 1)
+    # Tout en double : avec un 1 entier, PowerShell choisit Math.Min(int, int),
+    # arrondit 0,5 à 0, et l'image part en 1 x 1 pixel.
+    $k = [Math]::Min([Math]::Min(1920.0 / $l, 540.0 / $h), 1.0)
     $lr = [Math]::Max(1, [int]($l * $k)); $hr = [Math]::Max(1, [int]($h * $k))
     $plein = New-Object Drawing.Bitmap $l, $h
     $reduit = New-Object Drawing.Bitmap $lr, $hr
