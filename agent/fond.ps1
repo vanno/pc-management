@@ -68,7 +68,7 @@ function Get-Valeur([string]$Cle, [string]$Nom) {
 
 function Write-Resultat([bool]$Ok, [string]$Texte) {
     if (-not (Test-Path $perso)) { New-Item -ItemType Directory -Path $perso -Force | Out-Null }
-    $r = [ordered]@{ le = (Get-Date).ToString('o'); ok = $Ok; detail = $Texte }
+    $r = [ordered]@{ le = (Get-Date).ToString('o'); ok = $Ok; detail = $Texte; noir = [bool]$script:noir }
     [IO.File]::WriteAllText($resultatFichier, ($r | ConvertTo-Json), (New-Object System.Text.UTF8Encoding $false))
 }
 

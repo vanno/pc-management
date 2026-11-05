@@ -31,6 +31,7 @@ class FakeMesh:
         self.pilot_ops = []
         self.woken = []
         self.messages = []
+        self.check_points = [{"nom": "Veille", "ok": True, "constat": "jamais"}]
 
     def toast(self, device_id, message, title):
         self.messages.append(("toast", device_id, message, title))
@@ -67,6 +68,8 @@ class FakeMesh:
             self.pilot_ops.append(params)
             if params["op"] == "etat":
                 return pnpl_reply(nonce, op="etat", ok=True, evenement=self.event, depuis="2026-11-03T09:00:00", cartes=[])
+            if params["op"] == "controle":
+                return pnpl_reply(nonce, op="controle", ok=True, detail="", points=self.check_points)
             if params["op"] == "diagnostic":
                 return pnpl_reply(nonce, op="diagnostic", ok=True, detail="Ethernet 192.168.1.20/24 ; ports : 4/4 joignables", diagnostic={"poste": "PN01", "cartes": []})
             return pnpl_reply(nonce, op=params["op"], ok=True, detail="mode événement actif")
@@ -88,6 +91,7 @@ class FakeAvd:
         self.expired = expired
         self.heartbeats = []
         self.finished = []
+        self.controles = []
         self.inventories = []
         self.updates = []
         self.catalogue = None
@@ -109,8 +113,9 @@ class FakeAvd:
         taken, self.queue = self.queue[:limit], self.queue[limit:]
         return taken
 
-    def finish_task(self, task_id, ok, result):
+    def finish_task(self, task_id, ok, result, controle=None):
         self.finished.append((task_id, ok, result))
+        self.controles.append(controle)
         return not self.expired
 
     def computers(self):
@@ -394,8 +399,35 @@ class ServiceTests(unittest.TestCase):
         mesh = FakeMesh([PN01])
         avd = FakeAvd([{**task(action="mode_evenement"), "params": {"actif": True}}])
         self.service(mesh, avd).tick()
-        self.assertEqual(mesh.pilot_ops[0]["op"], "evenement")
+        self.assertEqual([o["op"] for o in mesh.pilot_ops], ["evenement", "controle"])
+        self.assertEqual(mesh.pilot_ops[1], {"op": "controle", "quoi": "evenement", "actif": True})
         self.assertEqual(avd.finished[0][1:], (True, "Mode événement actif"))
+        self.assertEqual(avd.controles[0], {"etat": "verifie", "points": [{"nom": "Veille", "ok": True, "constat": "jamais"}]})
+
+    def test_event_mode_not_applied_in_windows_fails(self):
+        mesh = FakeMesh([PN01])
+        mesh.check_points = [{"nom": "Notifications", "ok": False, "constat": "vannh : réglé, mais Windows affiche encore les notifications"}]
+        avd = FakeAvd([{**task(action="mode_evenement"), "params": {"actif": True}}])
+        self.service(mesh, avd).tick()
+        (_, ok, result), = avd.finished
+        self.assertFalse(ok)
+        self.assertEqual(result, "Mode événement actif. Pas appliqué dans Windows. Notifications : vannh : réglé, mais Windows affiche encore les notifications")
+        self.assertEqual(avd.controles[0]["etat"], "pas_applique")
+        self.assertIn("contrôle pas_applique", self.logs[-1])
+
+    def test_cleanup_and_probe_are_checked_and_others_are_not(self):
+        mesh = FakeMesh([PN01])
+        avd = FakeAvd([
+            {**task(action="nettoyage", id="n1"), "params": {"actif": False}},
+            {**task(action="message", id="m1"), "params": {"texte": "Pause"}},
+        ])
+        svc = self.service(mesh, avd)
+        svc.tick()
+        svc.tick()
+        # Le message ne lit que l'état du mode événement : pas de contrôle.
+        self.assertEqual([o["op"] for o in mesh.pilot_ops], ["nettoyage", "controle", "etat"])
+        self.assertEqual(mesh.pilot_ops[1], {"op": "controle", "quoi": "nettoyage", "actif": False})
+        self.assertEqual([c and c["etat"] for c in avd.controles], ["verifie", None])
 
     def test_wallpaper_task_sends_installer_with_reference(self):
         mesh = FakeMesh([PN01])
@@ -458,7 +490,9 @@ class ServiceTests(unittest.TestCase):
         svc.tick()
         svc.tick()
         self.assertEqual(mesh.pilot_ops[0]["parties"], ["notifications", "conseils"])
-        self.assertEqual(len(mesh.pilot_ops), 1)
+        # Le contrôle relit les mêmes parties ; la tâche refusée ne part pas.
+        self.assertEqual(mesh.pilot_ops[1]["parties"], ["notifications", "conseils"])
+        self.assertEqual(len(mesh.pilot_ops), 2)
         self.assertFalse(avd.finished[1][1])
         self.assertIn("parties", avd.finished[1][2])
 

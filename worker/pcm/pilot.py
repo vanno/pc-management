@@ -50,6 +50,7 @@ WALLPAPER_SCRIPT = Path(__file__).resolve().parents[2] / "agent" / "fond.ps1"
 WALLPAPER_INSTALLER = Path(__file__).resolve().parents[2] / "agent" / "fond-pose.ps1"
 THUMBNAIL_SCRIPT = Path(__file__).resolve().parents[2] / "agent" / "vignette.ps1"
 THUMBNAIL_INSTALLER = Path(__file__).resolve().parents[2] / "agent" / "vignette-pose.ps1"
+CHECK_SCRIPT = Path(__file__).resolve().parents[2] / "agent" / "controle.ps1"
 MESSAGE_KINDS = ("toast", "boite")
 MESSAGE_MAX = 500
 TITLE_MAX = 60
@@ -286,9 +287,10 @@ def supervision(mesh: MeshCtrl, device_id: str, unit_id: str, params: dict, avd,
     return bool(reply.get("ok")), detail[:1].upper() + detail[1:]
 
 
-def wallpaper(mesh: MeshCtrl, device_id: str, reference: str, params: dict, new_nonce: Callable[[], str], script: str | None = None) -> tuple[bool, str]:
+def wallpaper(mesh: MeshCtrl, device_id: str, reference: str, params: dict, new_nonce: Callable[[], str], script: str | None = None) -> tuple[bool, str] | tuple[bool, str, dict]:
     """Pose ou retire le fond d'état (agent/fond.ps1) par agent/fond-pose.ps1,
-    à part de pilote.ps1 pour rester sous la longueur de commande."""
+    à part de pilote.ps1 pour rester sous la longueur de commande. Le bilan
+    relu dans chaque session ouverte devient le contrôle de la tâche."""
     if not isinstance(params.get("actif"), bool):
         return False, "Paramètre `actif` manquant."
     body: dict = {"op": "fond", "actif": params["actif"]}
@@ -301,7 +303,64 @@ def wallpaper(mesh: MeshCtrl, device_id: str, reference: str, params: dict, new_
     except (MeshError, PilotError) as exc:
         return False, str(exc)
     detail = reply.get("detail") or ""
-    return bool(reply.get("ok")), detail[:1].upper() + detail[1:]
+    text = detail[:1].upper() + detail[1:]
+    if not isinstance(reply.get("points"), list):
+        return bool(reply.get("ok")), text
+    return bool(reply.get("ok")), text, verdict(reply["points"], "Aucune session ouverte sur le poste : rien à relire.")
+
+
+# --- Contrôle : l'effet réel d'une action, relu dans Windows -----------------------
+
+# Ce que le contrôle attend au plus : la sonde (45 s), le fond (30 s), les notifications (20 s).
+CHECK_TIMEOUT = 150
+CHECK_POINTS = 30
+# Les actions relues par agent/controle.ps1, et ce qu'il y relit.
+CHECKED = {"mode_evenement": "evenement", "nettoyage": "nettoyage", "supervision": "supervision"}
+
+
+def verdict(points, raison: str | None = None) -> dict:
+    """Le contrôle tel qu'AVDiagram le garde : `verifie` quand chaque point a été
+    relu tel que voulu, `pas_applique` quand Windows n'en applique pas un,
+    `non_verifie` sinon (rien de relu, ou un point illisible)."""
+    clean = []
+    for p in points if isinstance(points, list) else []:
+        if not isinstance(p, dict) or not isinstance(p.get("nom"), str) or not p["nom"].strip():
+            continue
+        ok = p["ok"] if isinstance(p.get("ok"), bool) else None
+        clean.append({"nom": p["nom"].strip()[:60], "ok": ok, "constat": str(p.get("constat") or "").strip()[:300]})
+    clean = clean[:CHECK_POINTS]
+    if any(p["ok"] is False for p in clean):
+        state = "pas_applique"
+    elif clean and all(p["ok"] is True for p in clean):
+        state = "verifie"
+    else:
+        state = "non_verifie"
+    out: dict = {"etat": state, "points": clean}
+    if state == "non_verifie" and raison:
+        out["raison"] = raison.strip()[:300]
+    return out
+
+
+def check(mesh: MeshCtrl, device_id: str, quoi: str, params: dict, new_nonce: Callable[[], str], script: str | None = None) -> dict:
+    """Relit dans Windows l'effet d'une action faite (agent/controle.ps1, qui ne
+    change aucun réglage)."""
+    body: dict = {"op": "controle", "quoi": quoi, "actif": params.get("actif") is True}
+    if isinstance(params.get("parties"), list):
+        body["parties"] = [p for p in dict.fromkeys(params["parties"]) if p in EVENT_PARTS]
+    try:
+        reply = call(mesh, device_id, body, new_nonce, timeout=CHECK_TIMEOUT, script=script or CHECK_SCRIPT.read_text(encoding="utf-8"))
+    except (MeshError, PilotError) as exc:
+        return verdict([], f"Contrôle impossible : {exc}")
+    raison = None if reply.get("ok") else f"Contrôle interrompu : {reply.get('detail') or 'sans explication'}"
+    return verdict(reply.get("points"), raison)
+
+
+def with_check(ok: bool, text: str, controle: dict) -> tuple[bool, str, dict]:
+    """Une action que Windows n'applique pas passe en échec, avec ce qui manque."""
+    if controle["etat"] != "pas_applique":
+        return ok, text, controle
+    manque = ". ".join(f"{p['nom']} : {p['constat']}" for p in controle["points"] if p["ok"] is False)
+    return False, f"{text.rstrip('.')}. Pas appliqué dans Windows. {manque}", controle
 
 
 def thumbnail(mesh: MeshCtrl, device_id: str, unit_id: str, params: dict, avd, new_nonce: Callable[[], str], script: str | None = None) -> tuple[bool, str]:

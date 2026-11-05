@@ -50,7 +50,7 @@ function Invoke-Sessions([string]$SansCompte) {
     $debut = (Get-Date).AddSeconds(-1)
     Start-ScheduledTask -TaskName $tache -ErrorAction SilentlyContinue
     $comptes = Get-Comptes
-    if (-not $comptes.Count) { return @{ echec = $false; texte = $SansCompte } }
+    if (-not $comptes.Count) { return @{ echec = $false; texte = $SansCompte; points = @() } }
     $bilans = @{}
     for ($i = 0; $i -lt 30 -and $bilans.Count -lt $comptes.Count; $i++) {
         Start-Sleep -Seconds 1
@@ -62,14 +62,15 @@ function Invoke-Sessions([string]$SansCompte) {
             }
         }
     }
-    $echec = $false
-    $lignes = foreach ($c in $comptes) {
+    # Un point de contrôle par session, comme agent/controle.ps1 (ok nul : pas relu).
+    $points = foreach ($c in $comptes) {
         $b = $bilans[$c.nom]
-        if (-not $b) { "Session de $($c.nom) : pas de réponse en 30 secondes, nouvel essai dans 15 minutes" }
-        elseif ($b.ok) { "Session de $($c.nom) : $($b.detail)" }
-        else { $echec = $true; "Session de $($c.nom) : échec, $(([string]$b.detail).Substring(0, [Math]::Min(200, ([string]$b.detail).Length)))" }
+        if (-not $b) { [ordered]@{ nom = "Session de $($c.nom)"; ok = $null; constat = 'pas de réponse en 30 secondes, nouvel essai dans 15 minutes' } }
+        elseif ($b.ok) { [ordered]@{ nom = "Session de $($c.nom)"; ok = $true; constat = [string]$b.detail } }
+        else { [ordered]@{ nom = "Session de $($c.nom)"; ok = $false; constat = "échec, $(([string]$b.detail).Substring(0, [Math]::Min(200, ([string]$b.detail).Length)))" } }
     }
-    @{ echec = $echec; texte = ($lignes -join '. ') }
+    $points = @($points)
+    @{ echec = [bool]@($points | Where-Object { $_.ok -eq $false }).Count; texte = (($points | ForEach-Object { "$($_.nom) : $($_.constat)" }) -join '. '); points = $points }
 }
 
 function Write-Etat($Valeurs) {
@@ -113,6 +114,7 @@ try {
         $l.Save()
         $sessions = Invoke-Sessions 'Aucun compte ouvert : il s''affichera à la prochaine ouverture de session'
         $result.ok = -not $sessions.echec
+        $result.points = $sessions.points
         $result.detail = "fond d'état posé, icône « État du poste » sur le Bureau. $($sessions.texte)"
         if ($sessions.echec) { $result.detail = "fond d'état pas affiché. $($sessions.texte)" }
     } else {
@@ -124,6 +126,7 @@ try {
         # s'ouvre. pilote.ps1 la retire après 7 jours.
         $sessions = Invoke-Sessions 'Aucun compte ouvert.'
         $result.ok = -not $sessions.echec
+        $result.points = $sessions.points
         $result.detail = "fond d'état retiré, les comptes fermés retrouvent le leur à leur prochaine session. $($sessions.texte)"
         }
     }

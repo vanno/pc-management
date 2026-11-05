@@ -266,6 +266,8 @@ function Disable-Evenement($Demande) {
         $result.detail = "$($faits -join ', '). Reste actif : $($reste -join ', ')"
         return
     }
+    # La copie rendue : agent/controle.ps1 y relit l'état d'avant.
+    Write-Utf8 (Join-Path $base 'mode-evenement-rendu.json') ($etat | ConvertTo-Json -Depth 6)
     Remove-Item -Path $fichierEvenement -Force
     $result.ok = $true
     $result.detail = "poste rendu à la normale (actif depuis le $(([datetime]$etat.depuis).ToString('dd/MM HH:mm'))) : $($faits -join ', ')"
@@ -707,6 +709,7 @@ function Disable-Nettoyage {
         $result.detail = "annulation partielle, à reprendre : $($echecs -join ', ')"
         return
     }
+    Write-Utf8 (Join-Path $base 'nettoyage-rendu.json') ($etat | ConvertTo-Json -Depth 6)
     Remove-Item -Path $fichierNettoyage -Force
     $result.ok = $true
     $result.applications = $apps
