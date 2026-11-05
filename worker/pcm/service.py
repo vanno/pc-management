@@ -121,6 +121,8 @@ class Service:
         self.pilot_script = pilot_script
         # agent/controle.ps1, relu à chaque contrôle sauf s'il est donné ici.
         self.check_script: str | None = None
+        # agent/fond-pose.ps1, de même (le mode événement le pose s'il manque).
+        self.wallpaper_script: str | None = None
         self.seen: list[dict] = []
         parallel = bool(getattr(mesh, "parallel", False))
         self.concurrency = max(1, concurrency or 4) if parallel else 1
@@ -248,10 +250,17 @@ class Service:
         self.log(f"tâche {task['id']} {task.get('action')} {task.get('asset_tag')} : {state} : {result}{suffix}")
 
     def _checked(self, device: Device, action: str, params: dict, done: tuple) -> tuple:
-        """Après une action faite, son effet relu dans Windows (pilot.check)."""
+        """Après une action faite, son effet relu dans Windows (pilot.check).
+        Une action en échec qui a quand même posé quelque chose (`done[2]` vrai,
+        le nettoyage sans la liste des applications) est relue aussi : elle
+        reste en échec, et AVDiagram sait que le poste a changé."""
         ok, text = done[0], done[1]
-        if not ok:
+        partial = len(done) > 2 and done[2] is True
+        if not ok and not partial:
             return done
+        if partial:
+            controle = pilot.check(self.mesh, device.id, pilot.CHECKED[action], params, inv.new_nonce, script=self.check_script)
+            return False, text, controle
         controle = pilot.check(self.mesh, device.id, pilot.CHECKED[action], params, inv.new_nonce, script=self.check_script)
         return pilot.with_check(ok, text, controle)
 
@@ -338,10 +347,10 @@ class Service:
             # La sortie d'un script garde ses lignes.
             return ok, text if len(text) <= RESULT_MAX else text[: RESULT_MAX - 1] + "…"
         if action == "mode_evenement":
-            done = pilot.event_mode(self.mesh, device.id, params, inv.new_nonce, script=self.pilot_script)
+            done = pilot.event_mode(self.mesh, device.id, params, inv.new_nonce, script=self.pilot_script, reference=tag, wallpaper_script=self.wallpaper_script)
             return self._checked(device, action, params, done)
         if action == "fond":
-            return pilot.wallpaper(self.mesh, device.id, tag, params, inv.new_nonce)
+            return pilot.wallpaper(self.mesh, device.id, tag, params, inv.new_nonce, script=self.wallpaper_script)
         if action == "vignette":
             return pilot.thumbnail(self.mesh, device.id, task.get("unit_id") or "", params, self.avd, inv.new_nonce)
         if action == "message":

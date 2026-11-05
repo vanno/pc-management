@@ -1,8 +1,10 @@
 <#
   Contrôle d'une action, lancé par l'agent MeshCentral (compte SYSTEM) juste
   après elle, à part de pilote.ps1 : relit dans Windows l'effet de ce que
-  l'action devait changer. Ne change aucun réglage. Compatible Windows
-  PowerShell 5.1.
+  l'action devait changer. Ne change aucun réglage. Sa seule écriture, hors
+  de la lecture dans les sessions : une action que Windows n'applique pas
+  passe en échec dans l'historique de l'écran du poste (fond\etat.json).
+  Compatible Windows PowerShell 5.1.
 
   PNPL_PARAMS : { op: controle, quoi, actif, parties }
     quoi : evenement (parties : windows_update, veille, notifications,
@@ -14,7 +16,7 @@
   Notifications : relues dans chaque session ouverte par Windows lui-même
   (ToastNotificationManager), le registre ne prouvant que l'écriture. Une
   tâche temporaire du groupe Utilisateurs y lance la lecture, puis part.
-  Fond noir : la tâche PointeNoire-Fond est relancée, son bilan relu.
+  Écran « Mode événement » : la tâche PointeNoire-Fond est relancée, son bilan relu.
   Retour à la normale : comparé à l'état d'avant, gardé par pilote.ps1 dans
   mode-evenement-rendu.json et nettoyage-rendu.json (10 minutes au plus).
 #>
@@ -120,7 +122,7 @@ if (-not (Test-Path $d)) { New-Item -ItemType Directory -Path $d -Force | Out-Nu
 
 # Rend { sessions: SID des sessions ouvertes, bilans: SID -> bilan }.
 function Invoke-Sonde {
-    $comptes = Get-Sessions 'controle-session.json'
+    $comptes = @(Get-Sessions 'controle-session.json')
     if (-not $comptes.Count) { return @{ sessions = @(); bilans = @{} } }
     if (-not (Test-Path $dossierSonde)) { New-Item -ItemType Directory -Path $dossierSonde -Force | Out-Null }
     & icacls.exe $dossierSonde /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' '*S-1-5-32-545:(OI)(CI)RX' | Out-Null
@@ -166,7 +168,7 @@ $cleCdm = 'Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager'
 $cleScoobe = 'Software\Microsoft\Windows\CurrentVersion\UserProfileEngagement'
 $valeursConseils = @('SubscribedContent-338389Enabled', 'SubscribedContent-310093Enabled', 'SubscribedContent-338388Enabled', 'SoftLandingEnabled', 'SystemPaneSuggestionsEnabled')
 $toutesParties = @('windows_update', 'veille', 'notifications', 'conseils', 'fond')
-$noms = @{ windows_update = 'Windows Update'; veille = 'Veille'; notifications = 'Notifications'; conseils = 'Conseils Windows'; fond = 'Fond noir' }
+$noms = @{ windows_update = 'Windows Update'; veille = 'Veille'; notifications = 'Notifications'; conseils = 'Conseils Windows'; fond = 'Écran « Mode événement »' }
 # La clé de l'état d'avant que pilote.ps1 garde pour chaque partie activée.
 $clesAvant = @{ windows_update = 'wu'; veille = 'veille'; notifications = 'toasts'; conseils = 'conseils' }
 
@@ -267,28 +269,28 @@ function Test-Conseils([bool]$Actif, $Avant) {
     Add-Comptes 'Conseils Windows' $etats 'aucun compte ouvert, rien n''a été réglé' $Actif
 }
 
-# Le fond d'état est redessiné dans chaque session : noir pendant l'événement.
+# Le fond d'état est redessiné dans chaque session : « MODE ÉVÉNEMENT » sur fond noir pendant l'événement.
 function Test-Fond([bool]$Noir) {
     $e = Read-Json (Join-Path $base 'fond\etat.json')
     $nom = $noms['fond']
     if (-not $e -or $e.retire) {
-        if ($Noir) { Add-Point $nom $false 'le fond d''état n''est pas posé sur ce poste, rien ne passe au noir' }
+        if ($Noir) { Add-Point $nom $false 'l''état de l''écran n''a pas pu être posé : rien n''indique le mode à l''écran' }
         return
     }
-    $comptes = Get-Sessions 'fond-resultat.json'
+    $comptes = @(Get-Sessions 'fond-resultat.json')
     if (-not $comptes.Count) { Add-Point $nom $null 'aucune session ouverte, appliqué à la prochaine'; return }
     $debut = (Get-Date).AddSeconds(-1)
     Start-ScheduledTask -TaskName 'PointeNoire-Fond' -ErrorAction SilentlyContinue
     $bilans = Wait-Bilans $comptes $debut 30
-    $voulu = $(if ($Noir) { 'noir' } else { 'rendu' })
+    $voulu = $(if ($Noir) { 'en mode événement' } else { 'rendu' })
     $etats = foreach ($c in $comptes) {
         $b = $bilans[$c.sid]
         if (-not $b) { [pscustomobject]@{ ok = $null; texte = "$($c.nom) : pas de réponse en 30 secondes" } }
         elseif (-not $b.ok) { [pscustomobject]@{ ok = $false; texte = "$($c.nom) : $($b.detail)" } }
         elseif ($b.detail -like 'aucun écran*') { [pscustomobject]@{ ok = $null; texte = "$($c.nom) : aucun écran actif" } }
         elseif ($null -eq $b.noir) { [pscustomobject]@{ ok = $null; texte = "$($c.nom) : fond d'état d'une ancienne version, à afficher de nouveau" } }
-        elseif ([bool]$b.noir -ne $Noir) { [pscustomobject]@{ ok = $false; texte = "$($c.nom) : pas $voulu" } }
-        else { [pscustomobject]@{ ok = $true; texte = "$($c.nom) : $voulu, relu par Windows" } }
+        elseif ([bool]$b.noir -ne $Noir) { [pscustomobject]@{ ok = $false; texte = "$($c.nom) : écran pas $voulu" } }
+        else { [pscustomobject]@{ ok = $true; texte = "$($c.nom) : écran $voulu, relu par Windows" } }
     }
     Add-Comptes $nom $etats '' $false
 }
@@ -432,6 +434,20 @@ function Test-Supervision([bool]$Actif) {
     else { Add-Point 'Sonde' $true "première mesure envoyée à $($info.LastRunTime.ToString('HH:mm:ss'))" }
 }
 
+# L'écran du poste montre ses dernières actions : celle-ci y passe en échec
+# quand Windows ne l'a pas appliquée.
+function Update-Historique([string]$Op) {
+    $f = Join-Path $base 'fond\etat.json'
+    $e = Read-Json $f
+    if (-not $e -or -not $e.historique -or -not @($points | Where-Object { $_.ok -eq $false }).Count) { return }
+    $h = @($e.historique)[0]
+    if ([string]$h.op -ne $Op -or -not $h.ok) { return }
+    $h.ok = $false
+    $h.texte = "$($h.texte), pas appliqué"
+    [IO.File]::WriteAllText($f, ($e | ConvertTo-Json -Depth 4), (New-Object System.Text.UTF8Encoding $false))
+    Start-ScheduledTask -TaskName 'PointeNoire-Fond' -ErrorAction SilentlyContinue
+}
+
 # --- Entrée --------------------------------------------------------------------
 
 try {
@@ -442,6 +458,7 @@ try {
         'supervision' { Test-Supervision ([bool]$p.actif) }
         default { throw "contrôle inconnu : $($p.quoi)" }
     }
+    try { Update-Historique ([string]$p.quoi) } catch { }
     $result.ok = $true
 } catch {
     $result.detail = "$($_.Exception.Message) (controle.ps1, ligne $($_.InvocationInfo.ScriptLineNumber))"

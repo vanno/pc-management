@@ -49,7 +49,7 @@ function Get-Comptes {
 function Invoke-Sessions([string]$SansCompte) {
     $debut = (Get-Date).AddSeconds(-1)
     Start-ScheduledTask -TaskName $tache -ErrorAction SilentlyContinue
-    $comptes = Get-Comptes
+    $comptes = @(Get-Comptes)
     if (-not $comptes.Count) { return @{ echec = $false; texte = $SansCompte; points = @() } }
     $bilans = @{}
     for ($i = 0; $i -lt 30 -and $bilans.Count -lt $comptes.Count; $i++) {
@@ -118,7 +118,10 @@ try {
         $result.detail = "fond d'état posé, icône « État du poste » sur le Bureau. $($sessions.texte)"
         if ($sessions.echec) { $result.detail = "fond d'état pas affiché. $($sessions.texte)" }
     } else {
+        $ev = $null
+        try { $ev = Get-Content -Raw -Encoding UTF8 (Join-Path $env:ProgramData 'PointeNoire\mode-evenement.json') | ConvertFrom-Json } catch { }
         if (-not (Test-Path $fond)) { $result.ok = $true; $result.detail = 'pas de fond d''état sur ce poste' }
+        elseif ($ev -and @($ev.parties) -contains 'fond') { $result.detail = 'refusé : le poste est en mode événement, son écran l''indique jusqu''à la fin du mode' }
         else {
         Write-Etat ([ordered]@{ retire = $true; retireLe = (Get-Date).ToString('o') })
         Remove-Item $icone -Force -ErrorAction SilentlyContinue
@@ -132,7 +135,7 @@ try {
     }
 } catch {
     $result.ok = $false
-    $result.detail = $_.Exception.Message
+    $result.detail = "$($_.Exception.Message) (fond-pose.ps1, ligne $($_.InvocationInfo.ScriptLineNumber))"
 }
 $json = $result | ConvertTo-Json -Compress -Depth 4
 'PNPL1:' + $env:PNPL_NONCE + ':' + [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($json))

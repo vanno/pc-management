@@ -206,7 +206,18 @@ def power(mesh: MeshCtrl, device_id: str, params: dict, new_nonce: Callable[[], 
 EVENT_PARTS = ("windows_update", "veille", "notifications", "conseils", "fond")
 
 
-def event_mode(mesh: MeshCtrl, device_id: str, params: dict, new_nonce: Callable[[], str], script: str | None = None) -> tuple[bool, str]:
+def event_mode(
+    mesh: MeshCtrl,
+    device_id: str,
+    params: dict,
+    new_nonce: Callable[[], str],
+    script: str | None = None,
+    reference: str = "",
+    wallpaper_script: str | None = None,
+) -> tuple[bool, str]:
+    """Le mode événement. Sa partie « fond » affiche « MODE ÉVÉNEMENT » sur
+    l'écran principal : sans fond d'état sur le poste (`fond_a_poser`), le
+    relais le pose aussitôt, et le poste le retire à la fin du mode."""
     if not isinstance(params.get("actif"), bool):
         return False, "Paramètre `actif` manquant."
     body = {"op": "evenement", "actif": params["actif"], "jours": EVENT_DAYS}
@@ -220,14 +231,20 @@ def event_mode(mesh: MeshCtrl, device_id: str, params: dict, new_nonce: Callable
     except (MeshError, PilotError) as exc:
         return False, str(exc)
     detail = reply.get("detail") or ""
-    return bool(reply.get("ok")), detail[:1].upper() + detail[1:]
+    ok, text = bool(reply.get("ok")), detail[:1].upper() + detail[1:]
+    if ok and reply.get("fond_a_poser"):
+        posed = wallpaper(mesh, device_id, reference, {"actif": True}, new_nonce, script=wallpaper_script)
+        text = f"{text.rstrip('.')}. État de l'écran posé pour l'événement : {posed[1][:1].lower() + posed[1][1:]}" if posed[0] else f"{text.rstrip('.')}. État de l'écran pas posé : {posed[1]}"
+    return ok, text
 
 
 CLEANUP_TIMEOUT = 600
 
 
-def cleanup(mesh: MeshCtrl, device_id: str, params: dict, new_nonce: Callable[[], str], script: str | None = None) -> tuple[bool, str]:
-    """Le profil de nettoyage. L'état d'avant reste sur le poste, qui sait l'annuler."""
+def cleanup(mesh: MeshCtrl, device_id: str, params: dict, new_nonce: Callable[[], str], script: str | None = None) -> tuple[bool, str] | tuple[bool, str, bool]:
+    """Le profil de nettoyage. L'état d'avant reste sur le poste, qui sait l'annuler.
+    Un troisième élément vrai : en échec, mais l'allègement est posé (Windows
+    refuse seulement la liste des applications), donc à relire quand même."""
     if not isinstance(params.get("actif"), bool):
         return False, "Paramètre `actif` manquant."
     body = {"op": "nettoyage", "actif": params["actif"], "applications": params.get("applications") is True}
@@ -237,6 +254,8 @@ def cleanup(mesh: MeshCtrl, device_id: str, params: dict, new_nonce: Callable[[]
     except (MeshError, PilotError) as exc:
         return False, str(exc)
     detail = reply.get("detail") or ""
+    if reply.get("partiel") is True and not reply.get("ok"):
+        return False, detail[:1].upper() + detail[1:], True
     return bool(reply.get("ok")), detail[:1].upper() + detail[1:]
 
 

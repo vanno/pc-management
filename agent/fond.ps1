@@ -7,10 +7,12 @@
   Windows PowerShell 5.1, sans droit d'administrateur.
 
   Écran principal : la référence, les cartes réseau (IP, profil), le mode
-  événement partie par partie, le nettoyage, la sonde, la dernière commande.
-  Couleur : gris normal, orange mode événement partiel, rouge complet.
+  événement partie par partie, le nettoyage, la sonde, les cinq dernières
+  actions (réussie ou en échec). Couleur : gris normal, orange mode
+  événement partiel, rouge complet.
   Autres écrans : noir uni, rien ne part vers un projecteur ou un mur LED.
-  Partie « fond » du mode événement : tout noir, la référence en petit.
+  Partie « fond » du mode événement : « MODE ÉVÉNEMENT » en grand, depuis
+  quand, ce qui est coupé et les dernières actions, sans le détail réseau.
 
   Le fond d'origine de chaque écran est gardé dans
   %LOCALAPPDATA%\PointeNoire\fond-avant.json et rendu quand le pilote retire
@@ -31,7 +33,7 @@ $avantFichier = Join-Path $perso 'fond-avant.json'
 $resultatFichier = Join-Path $perso 'fond-resultat.json'
 $cleFonds = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Wallpapers'
 $cleUne = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\DesktopSpotlight\Settings'
-$parties = [ordered]@{ windows_update = 'Windows Update en pause'; veille = 'Veille coupée'; notifications = 'Notifications coupées'; conseils = 'Conseils Windows coupés'; fond = 'Fond noir' }
+$parties = [ordered]@{ windows_update = 'Windows Update en pause'; veille = 'Veille coupée'; notifications = 'Notifications coupées'; conseils = 'Conseils Windows coupés'; fond = 'Écran « Mode événement »' }
 
 function Read-Json([string]$Chemin) {
     if (-not (Test-Path $Chemin)) { return $null }
@@ -57,7 +59,7 @@ function Get-Etat {
     if ($f -and $f.reference) { $ref = [string]$f.reference }
     [pscustomobject]@{
         reference = $ref; machine = $env:COMPUTERNAME; actives = $actives; depuis = $(if ($e) { $e.depuis } else { $null }); wu = $wu
-        nettoyage = $(if ($n) { $n.depuis } else { $null }); sonde = ($f -and $f.sonde); derniere = $(if ($f) { $f.derniere } else { $null })
+        nettoyage = $(if ($n) { $n.depuis } else { $null }); sonde = ($f -and $f.sonde); derniere = $(if ($f) { $f.derniere } else { $null }); historique = @($(if ($f) { $f.historique | Where-Object { $_ } }))
         cartes = $cartes; mesh = $(if ($mesh) { [string]$mesh.Status } else { 'absent' }); retire = ($f -and $f.retire)
     }
 }
@@ -88,16 +90,46 @@ function Get-Lignes($s) {
     if ($s.actives.Count) {
         foreach ($k in $parties.Keys) {
             $t = $parties[$k]
-            if ($k -eq 'windows_update' -and $s.wu) { $t += " jusqu'au $(Get-Date2 $s.wu)" }
-            $l.Add($(if ($s.actives -contains $k) { "■ $t" } else { "□ $($t -replace ' (en pause|coupée?s?|noir)$', '') : normal" }))
+            # La date de la pause, seulement si la partie est active : sinon « en pause jusqu'au … : normal ».
+            if ($k -eq 'windows_update' -and $s.wu -and $s.actives -contains $k) { $t += " jusqu'au $(Get-Date2 $s.wu)" }
+            $l.Add($(if ($s.actives -contains $k) { "■ $t" } else { "□ $($t -replace ' (en pause|coupée?s?)$', '' -replace '^Écran « Mode événement »$', 'Écran') : normal" }))
         }
     } else { $l.Add('Mode événement : inactif') }
     if ($s.nettoyage) { $l.Add("Nettoyé le $(Get-Date2 $s.nettoyage)") }
     $l.Add($(if ($s.sonde) { 'Supervision : active' } else { 'Supervision : non' }))
     $l.Add("Agent MeshCentral : $(@{ Running = 'actif'; Stopped = 'arrêté'; absent = 'absent' }[$s.mesh])")
-    if ($s.derniere) { $l.Add("Dernière commande : $($s.derniere.texte) ($(Get-Date2 $s.derniere.le))") }
+    if ($s.historique.Count) { foreach ($a in $s.historique) { $l.Add((Get-Action $a)) } }
+    elseif ($s.derniere) { $l.Add("Dernière commande : $($s.derniere.texte) ($(Get-Date2 $s.derniere.le))") }
     $l.Add("Mis à jour le $((Get-Date).ToString('dd/MM HH:mm'))")
     $l
+}
+
+# « Réussi 15:33 · Mode événement : actif », la date en plus si ce n'est pas aujourd'hui.
+function Get-Action($a) {
+    $quand = [string]$a.le
+    try { $d = [datetime]$a.le; $quand = $d.ToString($(if ($d.Date -eq (Get-Date).Date) { 'HH:mm' } else { 'dd/MM HH:mm' })) } catch { }
+    "$(if ($a.ok) { 'Réussi' } else { 'Échec' }) $quand · $($a.texte)"
+}
+
+# En mode événement : depuis quand, ce qui est coupé, les trois dernières actions.
+function Get-LignesEvenement($s) {
+    $l = New-Object System.Collections.Generic.List[string]
+    if ($s.depuis) { $l.Add("Depuis le $(Get-Date2 $s.depuis)") }
+    foreach ($k in $parties.Keys) {
+        if ($k -eq 'fond' -or $s.actives -notcontains $k) { continue }
+        $t = $parties[$k]
+        if ($k -eq 'windows_update' -and $s.wu) { $t += " jusqu'au $(Get-Date2 $s.wu)" }
+        $l.Add("■ $t")
+    }
+    foreach ($a in @($s.historique | Select-Object -First 3)) { $l.Add((Get-Action $a)) }
+    $l
+}
+
+# Coupe un texte trop long pour sa place, avec « … ».
+function Get-Ajuste($G, [string]$T, $F, [float]$Max) {
+    if ($G.MeasureString($T, $F).Width -le $Max) { return $T }
+    while ($T.Length -gt 4 -and $G.MeasureString("$T…", $F).Width -gt $Max) { $T = $T.Substring(0, $T.Length - 1) }
+    "$T…"
 }
 
 function Get-Ton($s) {
@@ -243,27 +275,32 @@ foreach ($e in $ecrans) {
     $g.TextRenderingHint = [Drawing.Text.TextRenderingHint]::AntiAliasGridFit
     $g.Clear([Drawing.Color]::Black)
     if ($e.principal) {
+        # Le même panneau en bas à droite. En mode événement (partie « fond ») :
+        # l'étiquette en grand, sans le détail réseau.
         $k = $h / 1080
-        if ($noir) {
-            # En direct : la référence seule, à peine lisible de près.
-            $p = New-Object Drawing.Font 'Segoe UI', ([float](11 * $k))
-            $g.DrawString($s.reference, $p, (New-Object Drawing.SolidBrush ([Drawing.Color]::FromArgb(70, 70, 70))), [float]($l - 140 * $k), [float]($h - 70 * $k))
-        } else {
-            $titre = New-Object Drawing.Font 'Segoe UI Semibold', ([float](34 * $k))
-            $etiquette = New-Object Drawing.Font 'Segoe UI Semibold', ([float](15 * $k))
-            $texte = New-Object Drawing.Font 'Segoe UI', ([float](13 * $k))
-            $lignes = @(Get-Lignes $s)
-            $pl = [float](560 * $k); $ph = [float]((110 + 24 * $lignes.Count) * $k)
-            $x = [float]($l - $pl - 40 * $k); $y = [float]($h - $ph - 80 * $k)
-            $g.FillRectangle((New-Object Drawing.SolidBrush ([Drawing.Color]::FromArgb(235, 22, 24, 28))), $x, $y, $pl, $ph)
-            $g.FillRectangle((New-Object Drawing.SolidBrush $ton[1]), $x, $y, [float](8 * $k), $ph)
-            $blanc = New-Object Drawing.SolidBrush ([Drawing.Color]::FromArgb(235, 235, 235))
-            $gris = New-Object Drawing.SolidBrush ([Drawing.Color]::FromArgb(170, 170, 170))
-            $g.DrawString($s.reference, $titre, $blanc, [float]($x + 24 * $k), [float]($y + 14 * $k))
-            $g.FillRectangle((New-Object Drawing.SolidBrush $ton[1]), [float]($x + 24 * $k), [float]($y + 72 * $k), [float](230 * $k), [float](26 * $k))
-            $g.DrawString($ton[0], $etiquette, $blanc, [float]($x + 30 * $k), [float]($y + 73 * $k))
-            $yy = $y + 108 * $k
-            foreach ($ligne in $lignes) { $g.DrawString($ligne, $texte, $(if ($ligne.StartsWith('■')) { $blanc } else { $gris }), [float]($x + 24 * $k), [float]$yy); $yy += 24 * $k }
+        $titre = New-Object Drawing.Font 'Segoe UI Semibold', ([float](34 * $k))
+        $etiquette = New-Object Drawing.Font 'Segoe UI Semibold', ([float]($(if ($noir) { 24 } else { 15 }) * $k))
+        $texte = New-Object Drawing.Font 'Segoe UI', ([float](13 * $k))
+        $libelle = $(if ($noir) { $ton[0].ToUpper() } else { $ton[0] })
+        $lignes = @($(if ($noir) { Get-LignesEvenement $s } else { Get-Lignes $s }))
+        $taille = $g.MeasureString($libelle, $etiquette)
+        $lh = [float]($taille.Height + 2 * $k)
+        $pl = [float](620 * $k); $ph = [float]((96 + 24 * $lignes.Count) * $k + $lh)
+        $x = [float]($l - $pl - 40 * $k); $y = [float]($h - $ph - 80 * $k)
+        $g.FillRectangle((New-Object Drawing.SolidBrush ([Drawing.Color]::FromArgb(235, 22, 24, 28))), $x, $y, $pl, $ph)
+        $g.FillRectangle((New-Object Drawing.SolidBrush $ton[1]), $x, $y, [float](8 * $k), $ph)
+        $blanc = New-Object Drawing.SolidBrush ([Drawing.Color]::FromArgb(235, 235, 235))
+        $gris = New-Object Drawing.SolidBrush ([Drawing.Color]::FromArgb(170, 170, 170))
+        $vert = New-Object Drawing.SolidBrush ([Drawing.Color]::FromArgb(120, 205, 145))
+        $rouge = New-Object Drawing.SolidBrush ([Drawing.Color]::FromArgb(245, 125, 110))
+        $g.DrawString($s.reference, $titre, $blanc, [float]($x + 24 * $k), [float]($y + 14 * $k))
+        $g.FillRectangle((New-Object Drawing.SolidBrush $ton[1]), [float]($x + 24 * $k), [float]($y + 72 * $k), [float]($taille.Width + 12 * $k), $lh)
+        $g.DrawString($libelle, $etiquette, $blanc, [float]($x + 30 * $k), [float]($y + 73 * $k))
+        $yy = $y + 72 * $k + $lh + 10 * $k
+        foreach ($ligne in $lignes) {
+            $pinceau = $(if ($ligne.StartsWith('■')) { $blanc } elseif ($ligne.StartsWith('Réussi')) { $vert } elseif ($ligne.StartsWith('Échec')) { $rouge } else { $gris })
+            $g.DrawString((Get-Ajuste $g $ligne $texte ($pl - 48 * $k)), $texte, $pinceau, [float]($x + 24 * $k), [float]$yy)
+            $yy += 24 * $k
         }
     }
     $g.Dispose()
