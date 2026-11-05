@@ -65,15 +65,14 @@ class CommandTests(unittest.TestCase):
         self.assertLess(len(cmd), 16_000)
 
     def test_wallpaper_installer_and_script_stay_under_the_agent_limit(self):
-        installer = pilot.WALLPAPER_INSTALLER.read_text(encoding="utf-8")
-        for path, op in ((pilot.SURVEY_SCRIPT, "releve"), (pilot.WALLPAPER_SCRIPT, "fond")):
-            cmd = pilot.build_command({"op": op, "actif": True, "reference": "PN-UK"}, "ab12", script=pilot.with_wallpaper(installer, path))
+        for installer, path, op in ((pilot.SURVEY_INSTALLER, pilot.SURVEY_SCRIPT, "releve"), (pilot.WALLPAPER_INSTALLER, pilot.WALLPAPER_SCRIPT, "fond")):
+            cmd = pilot.build_command({"op": op, "actif": True, "reference": "PN-UK"}, "ab12", script=pilot.with_wallpaper(installer.read_text(encoding="utf-8"), path))
             # La sonde passe à 22 100 caractères en production : 18 000 garde de la marge.
             self.assertLess(len(cmd), 18_000, path.name)
             # Le script arrive entier dans $FondSource, devant l'installeur.
             sent = pilot_script(cmd)
             self.assertTrue(sent.startswith("$FondSource = @'\n" + path.read_text(encoding="utf-8") + "\n'@\n"), path.name)
-            self.assertTrue(sent.endswith(installer))
+            self.assertTrue(sent.endswith(installer.read_text(encoding="utf-8")), installer.name)
 
     def test_check_script_travels_alone_under_the_same_limit(self):
         body = {"op": "controle", "quoi": "evenement", "actif": True, "parties": list(pilot.EVENT_PARTS)}
@@ -483,6 +482,12 @@ class AgentScriptTests(unittest.TestCase):
         # Win32_PowerPlan ne répond pas sans droit d'administrateur.
         self.assertNotIn("Win32_PowerPlan -", releve)
         self.assertIn("powercfg.exe /getactivescheme", releve)
+        # Second essai : @() directement sur une List de [pscustomobject] lève
+        # « Les types des arguments ne correspondent pas » sous PowerShell 5.1,
+        # et l'écran n'était plus dessiné. Ces listes passent par le pipeline.
+        for path in self.SCRIPTS:
+            text = path.read_text(encoding="utf-8-sig")
+            self.assertNotRegex(text, r"@\(\$\w+\.alertes\)", path.name)
 
     def test_cleanup_names_what_windows_refuses(self):
         """« Tentative d'exécution d'une opération non autorisée » sans plus :

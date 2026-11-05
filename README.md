@@ -288,9 +288,9 @@ compressé (gzip puis base64) comme les autres scripts.
   (vMix, OBS, Companion, ATEM, NDI Tools, Dante, Desktop Video). Protections :
   chaque partie du mode, avec les notifications et la veille relues dans
   Windows, et les dernières actions. Le même relevé s'ajoute à la page « État
-  du poste ». Le relais envoie `releve.ps1` dans une commande à part
-  (`op: releve`) avant le fond, pour rester sous la longueur de commande de
-  MeshCentral. Sans fond d'état sur le poste, le relais le pose en même temps
+  du poste ». Le relais envoie `releve.ps1` avant le fond, dans une commande
+  à part posée par `agent/releve-pose.ps1`, pour rester sous la longueur de
+  commande de MeshCentral. Sans fond d'état sur le poste, le relais le pose en même temps
   (`fond_a_poser`), et le poste le retire à la fin du mode ; le retrait à la
   main est refusé pendant le mode.
   L'historique vient de `pilote.ps1` (`historique` dans `fond\etat.json`) ;

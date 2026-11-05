@@ -49,6 +49,7 @@ DIAGNOSTIC_SCRIPT = Path(__file__).resolve().parents[2] / "agent" / "diagnostic.
 WALLPAPER_SCRIPT = Path(__file__).resolve().parents[2] / "agent" / "fond.ps1"
 WALLPAPER_INSTALLER = Path(__file__).resolve().parents[2] / "agent" / "fond-pose.ps1"
 SURVEY_SCRIPT = Path(__file__).resolve().parents[2] / "agent" / "releve.ps1"
+SURVEY_INSTALLER = Path(__file__).resolve().parents[2] / "agent" / "releve-pose.ps1"
 THUMBNAIL_SCRIPT = Path(__file__).resolve().parents[2] / "agent" / "vignette.ps1"
 THUMBNAIL_INSTALLER = Path(__file__).resolve().parents[2] / "agent" / "vignette-pose.ps1"
 CHECK_SCRIPT = Path(__file__).resolve().parents[2] / "agent" / "controle.ps1"
@@ -319,10 +320,12 @@ def wallpaper(mesh: MeshCtrl, device_id: str, reference: str, params: dict, new_
         if not REFERENCE_RE.fullmatch(reference or ""):
             return False, "Référence du poste illisible pour le fond d'état."
         body["reference"] = reference
-        # Le relevé de l'écran du mode événement d'abord : avec fond.ps1, la
-        # commande dépasserait la longueur que l'agent accepte.
+        # Le relevé de l'écran du mode événement d'abord, par son propre
+        # installeur : avec fond.ps1, la commande dépasserait la longueur que
+        # l'agent accepte.
         try:
-            first = call(mesh, device_id, {"op": "releve"}, new_nonce, script=with_wallpaper(installer, SURVEY_SCRIPT))
+            survey = with_wallpaper(SURVEY_INSTALLER.read_text(encoding="utf-8"), SURVEY_SCRIPT)
+            first = call(mesh, device_id, {"op": "releve"}, new_nonce, script=survey)
         except (MeshError, PilotError) as exc:
             return False, str(exc)
         if not first.get("ok"):

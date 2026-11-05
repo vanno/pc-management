@@ -5,9 +5,8 @@
 
   PNPL_PARAMS : { op: fond, actif, reference }. fond.ps1 arrive dans
   $FondSource, que le worker place en tête de ce script : les deux voyagent
-  compressés ensemble. Avant lui, { op: releve } pose de la même façon
-  agent/releve.ps1, le relevé de l'écran du mode événement : à deux dans une
-  commande, ils dépasseraient sa longueur. Sortie : PNPL1:<jeton>:<JSON en
+  compressés ensemble. Avant lui, releve-pose.ps1 pose agent/releve.ps1, le
+  relevé de l'écran du mode événement. Sortie : PNPL1:<jeton>:<JSON en
   base64>, comme pilote.ps1.
 
   Pose : C:\ProgramData\PointeNoire\fond (lecture seule pour les comptes),
@@ -89,13 +88,7 @@ try {
     $p = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($env:PNPL_PARAMS)) | ConvertFrom-Json
     $lanceur = Join-Path $dossier 'lanceur.vbs'
     $fond = Join-Path $dossier 'fond.ps1'
-    if ($p.op -eq 'releve') {
-        if (-not $FondSource) { throw 'releve.ps1 absent de la commande' }
-        if (-not (Test-Path $dossier)) { New-Item -ItemType Directory -Path $dossier -Force | Out-Null }
-        & icacls.exe $dossier /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' '*S-1-5-32-545:(OI)(CI)RX' | Out-Null
-        Write-Texte (Join-Path $dossier 'releve.ps1') $FondSource $true
-        $result.op = 'releve'; $result.ok = $true; $result.detail = 'relevé de l''écran posé'
-    } elseif ($p.actif) {
+    if ($p.actif) {
         if ([string]$p.reference -notmatch '^[\w .-]{1,60}$') { throw 'référence du poste illisible' }
         if (-not $FondSource) { throw 'fond.ps1 absent de la commande' }
         $script = $FondSource
