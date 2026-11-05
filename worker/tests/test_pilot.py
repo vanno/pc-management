@@ -18,6 +18,11 @@ def pnpl_reply(nonce, **data):
     return "bruit\r\n" + pilot.MARKER + nonce + ":" + base64.b64encode(json.dumps(data).encode()).decode() + "\r\n"
 
 
+def pilot_script(command):
+    packed = re.search(r"FromBase64String\('([^']+)'\)\);\$g", command).group(1)
+    return gzip.decompress(base64.b64decode(packed)).decode("utf-8")
+
+
 def nonces():
     n = iter(range(1, 1000))
     return lambda: f"{next(n):04x}"
@@ -60,10 +65,14 @@ class CommandTests(unittest.TestCase):
         self.assertLess(len(cmd), 16_000)
 
     def test_wallpaper_installer_and_script_stay_under_the_agent_limit(self):
-        body = {"op": "fond", "actif": True, "reference": "PN-UK", "script": pilot.pack(pilot.WALLPAPER_SCRIPT.read_bytes())}
-        cmd = pilot.build_command(body, "ab12", script=pilot.WALLPAPER_INSTALLER.read_text(encoding="utf-8"))
-        # La sonde passe à 22 100 caractères en production : 18 000 garde de la marge.
-        self.assertLess(len(cmd), 18_000)
+        for installer, path, op in ((pilot.SURVEY_INSTALLER, pilot.SURVEY_SCRIPT, "releve"), (pilot.WALLPAPER_INSTALLER, pilot.WALLPAPER_SCRIPT, "fond")):
+            cmd = pilot.build_command({"op": op, "actif": True, "reference": "PN-UK"}, "ab12", script=pilot.with_wallpaper(installer.read_text(encoding="utf-8"), path))
+            # La sonde passe à 22 100 caractères en production : 18 000 garde de la marge.
+            self.assertLess(len(cmd), 18_000, path.name)
+            # Le script arrive entier dans $FondSource, devant l'installeur.
+            sent = pilot_script(cmd)
+            self.assertTrue(sent.startswith("$FondSource = @'\n" + path.read_text(encoding="utf-8") + "\n'@\n"), path.name)
+            self.assertTrue(sent.endswith(installer.read_text(encoding="utf-8")), installer.name)
 
     def test_check_script_travels_alone_under_the_same_limit(self):
         body = {"op": "controle", "quoi": "evenement", "actif": True, "parties": list(pilot.EVENT_PARTS)}
@@ -354,13 +363,15 @@ class CheckTests(unittest.TestCase):
         self.assertEqual(pilot.with_check(True, "Sonde retirée", pilot.verdict([]))[:2], (True, "Sonde retirée"))
 
     def test_wallpaper_sessions_become_the_check(self):
-        mesh = FakeMesh({"fond": [
+        mesh = FakeMesh({"releve": [{"ok": True, "detail": "relevé de l'écran posé"}], "fond": [
             {"ok": True, "detail": "fond d'état posé. Session de vannh : affiché sur 2 écran(s)", "points": [{"nom": "Session de vannh", "ok": True, "constat": "affiché sur 2 écran(s)"}]},
             {"ok": True, "detail": "fond d'état retiré. Aucun compte ouvert.", "points": []},
             {"ok": True, "detail": "pas de fond d'état sur ce poste"},
         ]})
         ok, text, controle = pilot.wallpaper(mesh, "n", "PN09", {"actif": True}, nonces(), script="'x'")
         self.assertEqual((ok, controle["etat"]), (True, "verifie"))
+        # Le relevé part d'abord, seul ; le retrait n'en a pas besoin.
+        self.assertEqual([c[0] for c in mesh.calls[:2]], [{"op": "releve"}, {"op": "fond", "actif": True, "reference": "PN09"}])
         ok, text, controle = pilot.wallpaper(mesh, "n", "PN09", {"actif": False}, nonces(), script="'x'")
         self.assertEqual((controle["etat"], controle["raison"]), ("non_verifie", "Aucune session ouverte sur le poste : rien à relire."))
         self.assertEqual(len(pilot.wallpaper(mesh, "n", "PN09", {"actif": False}, nonces(), script="'x'")), 2)
@@ -368,15 +379,21 @@ class CheckTests(unittest.TestCase):
     def test_event_mode_screen_not_posed_is_said(self):
         mesh = FakeMesh({
             "evenement": [{"ok": True, "detail": "mode événement actif : veille coupée", "fond_a_poser": True}, {"ok": True, "detail": "mode événement déjà actif"}],
+            "releve": [{"ok": True, "detail": "relevé de l'écran posé"}],
             "fond": [{"ok": False, "detail": "fond d'état pas affiché. Session de vannh : échec, accès refusé", "points": []}],
         })
         ok, text = pilot.event_mode(mesh, "n", {"actif": True}, nonces(), script="'x'", reference="PN09", wallpaper_script="'y'")
         self.assertTrue(ok)
         self.assertEqual(text, "Mode événement actif : veille coupée. État de l'écran pas posé : Fond d'état pas affiché. Session de vannh : échec, accès refusé")
-        self.assertEqual(mesh.calls[1][0]["reference"], "PN09")
+        self.assertEqual(mesh.calls[2][0]["reference"], "PN09")
         # Sans `fond_a_poser`, rien d'autre ne part.
         self.assertEqual(pilot.event_mode(mesh, "n", {"actif": True}, nonces(), script="'x'"), (True, "Mode événement déjà actif"))
-        self.assertEqual(len(mesh.calls), 3)
+        self.assertEqual(len(mesh.calls), 4)
+
+    def test_wallpaper_stops_when_the_survey_is_not_posed(self):
+        mesh = FakeMesh({"releve": [{"ok": False, "detail": "accès refusé"}]})
+        self.assertEqual(pilot.wallpaper(mesh, "n", "PN09", {"actif": True}, nonces(), script="'x'"), (False, "Relevé de l'écran pas posé : accès refusé"))
+        self.assertEqual(len(mesh.calls), 1)
 
     def test_check_script_reads_what_the_pilot_writes(self):
         """controle.ps1 relit les mêmes réglages que ceux que pilote.ps1 pose."""
@@ -429,9 +446,23 @@ class AgentScriptTests(unittest.TestCase):
         fond = pilot.WALLPAPER_SCRIPT.read_text(encoding="utf-8")
         pilote = pilot.AGENT_SCRIPT.read_text(encoding="utf-8")
         controle = pilot.CHECK_SCRIPT.read_text(encoding="utf-8")
+        releve = pilot.SURVEY_SCRIPT.read_text(encoding="utf-8")
         # Plus de fond noir muet : l'étiquette en grand, et les actions réussies ou non.
-        self.assertIn("$ton[0].ToUpper()", fond)
-        self.assertIn("Get-LignesEvenement", fond)
+        self.assertIn("Show-Evenement $g $l $h $s $releve $ton[0].ToUpper()", fond)
+        self.assertIn("Dernières actions", releve)
+        # Le logo Pointe Noire en vecteurs (fond.ps1), sans lequel l'écran se dessine quand même.
+        self.assertIn('$codeLogo = @"', fond)
+        self.assertIn("try {\n        if (-not ('PointeNoire.Logo' -as [type]))", releve)
+        self.assertIn("IP publique", releve)
+        # Ce qui ne tient pas dans une colonne est compté, jamais perdu sans le dire.
+        self.assertIn("sur la page « État du poste »", releve)
+        self.assertIn("$coupes = @($a, $b)", releve)
+        # Une colonne trop longue raccourcit sa plus longue section, pas la dernière.
+        self.assertIn("$cible.vues--", releve)
+        # Ce que le technicien veut voir part en dernier, et l'écran normal n'est jamais raccourci pour rien.
+        self.assertIn("min = $(if ($nom -in 'Protections', 'Dernières actions') { 2 } else { 1 })", releve)
+        self.assertIn("$total = -18", releve)
+        self.assertNotIn("WSearch", releve)
         self.assertNotIn("à peine lisible", fond)
         self.assertIn("'Réussi' } else { 'Échec' }", fond)
         self.assertIn("historique", pilote)
@@ -445,6 +476,31 @@ class AgentScriptTests(unittest.TestCase):
         self.assertIn("$s.wu -and $s.actives -contains $k", fond.split("function Get-Lignes", 1)[1].split("\nfunction ", 1)[0])
         # Un échec garde à l'écran la phrase qui dit pourquoi, pas seulement la première.
         self.assertIn("pas retirées|[Rr]efusé|échec|erreur", pilote.split("function Update-Fond", 1)[1])
+
+    def test_survey_reads_protections_in_windows(self):
+        """Essai sous Windows du 2026-11-05 : la page d'un poste en mode normal
+        affichait quatre « Mode événement partiel », et deux protections
+        passaient au vert sans rien relire."""
+        releve = pilot.SURVEY_SCRIPT.read_text(encoding="utf-8")
+        pilote = pilot.AGENT_SCRIPT.read_text(encoding="utf-8")
+        # Mode normal : rien de coupé n'est pas un défaut.
+        self.assertIn("if (-not $actives.Count) { Add-Ligne 'Protections' 'Mode événement inactif", releve)
+        # Les conseils relus sont ceux que le pilote coupe.
+        pattern = r"\$valeursConseils = (@\([^)]*\))"
+        self.assertEqual(re.search(pattern, releve).group(1), re.search(pattern, pilote).group(1))
+        # La veille relue sur les trois réglages que le pilote met à 0.
+        for reglage in ("STANDBYIDLE", "HIBERNATEIDLE", "VIDEOIDLE"):
+            self.assertIn(reglage, pilote)
+            self.assertIn(reglage, releve.split("function Get-Protection", 1)[1])
+        # Win32_PowerPlan ne répond pas sans droit d'administrateur.
+        self.assertNotIn("Win32_PowerPlan -", releve)
+        self.assertIn("powercfg.exe /getactivescheme", releve)
+        # Second essai : @() directement sur une List de [pscustomobject] lève
+        # « Les types des arguments ne correspondent pas » sous PowerShell 5.1,
+        # et l'écran n'était plus dessiné. Ces listes passent par le pipeline.
+        for path in self.SCRIPTS:
+            text = path.read_text(encoding="utf-8-sig")
+            self.assertNotRegex(text, r"@\(\$\w+\.alertes\)", path.name)
 
     def test_cleanup_names_what_windows_refuses(self):
         """« Tentative d'exécution d'une opération non autorisée » sans plus :

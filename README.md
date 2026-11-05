@@ -274,11 +274,27 @@ compressé (gzip puis base64) comme les autres scripts.
   actions, chacune « Réussi » (vert) ou « Échec » (rouge) ; gris en temps
   normal, orange en mode événement partiel, rouge complet. Les autres écrans
   sont noirs : rien ne part vers un projecteur ou un mur LED. La partie
-  `fond` du mode événement affiche « MODE ÉVÉNEMENT » en grand, depuis quand,
-  ce qui est coupé et les trois dernières actions, sans le détail réseau :
-  l'opérateur sait toujours dans quel mode il est. Sans fond d'état sur le
-  poste, le relais le pose en même temps (`fond_a_poser`), et le poste le
-  retire à la fin du mode ; le retrait à la main est refusé pendant le mode.
+  `fond` du mode événement remplace ce panneau par l'écran d'un technicien du
+  direct (`agent/releve.ps1`) : le logo Pointe Noire (en vecteurs, repris des
+  étiquettes d'AVDiagram), un bandeau « MODE ÉVÉNEMENT » avec la
+  référence et l'heure du relevé, un cadre « À vérifier » qui remonte les
+  points bloquants, puis trois colonnes. Réseau : carte, câble ou Wi-Fi,
+  vitesse du lien, IP locale et publique, profil Public (NDI bloqué),
+  passerelle, internet, DNS
+  et sortie RTMP (port 1935). Écrans et son : définition et fréquence de
+  chaque écran, sortie et entrée son par défaut. Machine : secteur ou
+  batterie, mode d'alimentation, disques, mémoire, redémarrage en attente,
+  cartes graphiques. Services : prise en main à distance, son Windows et
+  services de production (Dante, NDI, Blackmagic, AJA, Magewell, Elgato,
+  vMix, Companion, Bonjour). Logiciels du direct installés, lancés ou non
+  (vMix, OBS, Companion, ATEM, NDI Tools, Dante, Desktop Video). Protections :
+  chaque partie du mode, avec les notifications et la veille relues dans
+  Windows, et les dernières actions. Le même relevé s'ajoute à la page « État
+  du poste ». Le relais envoie `releve.ps1` avant le fond, dans une commande
+  à part posée par `agent/releve-pose.ps1`, pour rester sous la longueur de
+  commande de MeshCentral. Sans fond d'état sur le poste, le relais le pose en même temps
+  (`fond_a_poser`), et le poste le retire à la fin du mode ; le retrait à la
+  main est refusé pendant le mode.
   L'historique vient de `pilote.ps1` (`historique` dans `fond\etat.json`) ;
   `controle.ps1` y fait passer en échec l'action que Windows n'a pas appliquée.
   Une tâche PointeNoire-Fond (groupe Utilisateurs, par `wscript` pour

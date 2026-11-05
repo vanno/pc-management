@@ -17,7 +17,7 @@ from pcm import software as sw
 from test_inventory import FIXTURE, agent_output
 from test_software import winget_output
 from test_installers import params_of, reply as pnin_reply
-from test_pilot import pilot_params, pnpl_reply
+from test_pilot import pilot_params, pilot_script, pnpl_reply
 
 
 class FakeMesh:
@@ -29,6 +29,7 @@ class FakeMesh:
         self.winget_codes = {}
         self.event = False
         self.pilot_ops = []
+        self.pilot_scripts = []
         self.screen_to_pose = False
         self.cleanup_without_app_list = False
         self.woken = []
@@ -68,6 +69,9 @@ class FakeMesh:
         if "$env:PNPL_NONCE='" in command:
             nonce, params = pilot_params(command)
             self.pilot_ops.append(params)
+            self.pilot_scripts.append(pilot_script(command))
+            if params["op"] == "releve":
+                return pnpl_reply(nonce, op="releve", ok=True, detail="relevé de l'écran posé")
             if params["op"] == "etat":
                 return pnpl_reply(nonce, op="etat", ok=True, evenement=self.event, depuis="2026-11-03T09:00:00", cartes=[])
             if params["op"] == "controle":
@@ -418,8 +422,8 @@ class ServiceTests(unittest.TestCase):
         mesh.screen_to_pose = True
         avd = FakeAvd([{**task(action="mode_evenement"), "params": {"actif": True}}])
         self.service(mesh, avd).tick()
-        self.assertEqual([o["op"] for o in mesh.pilot_ops], ["evenement", "fond", "controle"])
-        self.assertEqual((mesh.pilot_ops[1]["actif"], mesh.pilot_ops[1]["reference"]), (True, "PN01"))
+        self.assertEqual([o["op"] for o in mesh.pilot_ops], ["evenement", "releve", "fond", "controle"])
+        self.assertEqual((mesh.pilot_ops[2]["actif"], mesh.pilot_ops[2]["reference"]), (True, "PN01"))
         (_, ok, result), = avd.finished
         self.assertTrue(ok)
         self.assertEqual(result, "Mode événement actif : écran « Mode événement ». État de l'écran posé pour l'événement : fond d'état posé. Session de vannh : affiché sur 1 écran(s)")
@@ -468,9 +472,11 @@ class ServiceTests(unittest.TestCase):
         svc = self.service(mesh, avd)
         svc.tick()
         svc.tick()
-        posee, retiree = mesh.pilot_ops
+        releve, posee, retiree = mesh.pilot_ops
+        self.assertEqual(releve, {"op": "releve"})
         self.assertEqual((posee["op"], posee["actif"], posee["reference"]), ("fond", True, "PN01"))
-        self.assertEqual(gzip.decompress(base64.b64decode(posee["script"])), pilot.WALLPAPER_SCRIPT.read_bytes())
+        self.assertIn(pilot.SURVEY_SCRIPT.read_text(encoding="utf-8"), mesh.pilot_scripts[0])
+        self.assertIn(pilot.WALLPAPER_SCRIPT.read_text(encoding="utf-8"), mesh.pilot_scripts[1])
         self.assertEqual(retiree, {"op": "fond", "actif": False})
         self.assertTrue(avd.finished[0][1] and avd.finished[1][1])
 

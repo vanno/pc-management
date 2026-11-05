@@ -48,6 +48,8 @@ PROBE_SCRIPT = Path(__file__).resolve().parents[2] / "agent" / "supervision.ps1"
 DIAGNOSTIC_SCRIPT = Path(__file__).resolve().parents[2] / "agent" / "diagnostic.ps1"
 WALLPAPER_SCRIPT = Path(__file__).resolve().parents[2] / "agent" / "fond.ps1"
 WALLPAPER_INSTALLER = Path(__file__).resolve().parents[2] / "agent" / "fond-pose.ps1"
+SURVEY_SCRIPT = Path(__file__).resolve().parents[2] / "agent" / "releve.ps1"
+SURVEY_INSTALLER = Path(__file__).resolve().parents[2] / "agent" / "releve-pose.ps1"
 THUMBNAIL_SCRIPT = Path(__file__).resolve().parents[2] / "agent" / "vignette.ps1"
 THUMBNAIL_INSTALLER = Path(__file__).resolve().parents[2] / "agent" / "vignette-pose.ps1"
 CHECK_SCRIPT = Path(__file__).resolve().parents[2] / "agent" / "controle.ps1"
@@ -313,12 +315,25 @@ def wallpaper(mesh: MeshCtrl, device_id: str, reference: str, params: dict, new_
     if not isinstance(params.get("actif"), bool):
         return False, "Paramètre `actif` manquant."
     body: dict = {"op": "fond", "actif": params["actif"]}
+    installer = script or WALLPAPER_INSTALLER.read_text(encoding="utf-8")
     if params["actif"]:
         if not REFERENCE_RE.fullmatch(reference or ""):
             return False, "Référence du poste illisible pour le fond d'état."
-        body.update({"reference": reference, "script": pack(WALLPAPER_SCRIPT.read_bytes())})
+        body["reference"] = reference
+        # Le relevé de l'écran du mode événement d'abord, par son propre
+        # installeur : avec fond.ps1, la commande dépasserait la longueur que
+        # l'agent accepte.
+        try:
+            survey = with_wallpaper(SURVEY_INSTALLER.read_text(encoding="utf-8"), SURVEY_SCRIPT)
+            first = call(mesh, device_id, {"op": "releve"}, new_nonce, script=survey)
+        except (MeshError, PilotError) as exc:
+            return False, str(exc)
+        if not first.get("ok"):
+            detail = first.get("detail") or "pas de réponse"
+            return False, f"Relevé de l'écran pas posé : {detail}"
+        installer = with_wallpaper(installer)
     try:
-        reply = call(mesh, device_id, body, new_nonce, script=script or WALLPAPER_INSTALLER.read_text(encoding="utf-8"))
+        reply = call(mesh, device_id, body, new_nonce, script=installer)
     except (MeshError, PilotError) as exc:
         return False, str(exc)
     detail = reply.get("detail") or ""
@@ -439,6 +454,16 @@ def message(mesh: MeshCtrl, device_id: str, name: str, params: dict, new_nonce: 
 
 def pack(data: bytes) -> str:
     return base64.b64encode(gzip.compress(data, mtime=0)).decode("ascii")
+
+
+def with_wallpaper(installer: str, path: Path = WALLPAPER_SCRIPT) -> str:
+    """Un script du fond en tête de fond-pose.ps1, dans `$FondSource` : une
+    seule compression pour les deux, au lieu d'un base64 dans le base64 des
+    paramètres."""
+    source = path.read_text(encoding="utf-8-sig")
+    if re.search(r"^'@", source, re.M):
+        raise PilotError(f"{path.name} a une ligne qui commence par '@ : il ne peut pas voyager dans une chaîne @' '@.")
+    return f"$FondSource = @'\n{source}\n'@\n{installer}"
 
 
 def send(mesh: MeshCtrl, device_id: str, item: dict, params: dict, new_nonce: Callable[[], str], script: str | None = None) -> tuple[bool, str]:
