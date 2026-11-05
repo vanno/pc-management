@@ -125,7 +125,9 @@ class Service:
         self.schedules = schedules or {}
         self.tz = tz
         self.clock = clock
-        self.tool: dict = {}
+        # Les actions que cette version sait faire : AVDiagram grise les autres
+        # au lieu de laisser partir une tâche vouée à l'échec.
+        self.tool: dict = {"actions": list(ACTIONS)}
         self._version_at: datetime | None = None
         self._plan_failed: dict[str, datetime] = {}
         self.data_dir = os.path.dirname(os.path.abspath(os.environ.get("PCM_DB", "data/pcm.sqlite")))

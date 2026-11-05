@@ -521,6 +521,15 @@ class ToolUpdateTests(unittest.TestCase):
         self.assertFalse((self.data / "maj-demandee").exists())
         self.assertEqual(avd.heartbeats[0]["tool"]["nas"]["version"], "dev")
 
+    def test_beat_lists_known_actions(self):
+        avd = FakeAvd()
+        svc = self.service(avd)
+        svc.tick()
+        actions = avd.heartbeats[0]["tool"]["actions"]
+        self.assertIn("vignette", actions)
+        self.assertIn("message", actions)
+        self.assertEqual(len(actions), len(set(actions)))
+
 
 class MeshDownTests(unittest.TestCase):
     """MeshCentral injoignable : AVDiagram reçoit l'erreur (alerte du parc, 0079)."""
