@@ -93,6 +93,7 @@ namespace PointeNoire {
 }
 "@
 
+
 function New-Ligne([string]$Texte, [string]$Niveau = 'neutre') { [pscustomobject]@{ t = $Texte; n = $Niveau } }
 
 function Get-Adresse([string]$Hote) {
@@ -118,6 +119,19 @@ function Get-Ping([string]$Hote) {
 }
 
 function Get-Go([double]$Octets) { '{0:N0} Go' -f ($Octets / 1GB) }
+
+# L'adresse publique du poste, vue par Cloudflare (1.1.1.1, sans DNS), $null en 2,5 secondes.
+function Get-IpPublique {
+    try {
+        [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+        $q = [Net.HttpWebRequest]::Create('https://1.1.1.1/cdn-cgi/trace')
+        $q.Timeout = 2500; $q.ReadWriteTimeout = 2500
+        $rep = $q.GetResponse()
+        try { $texte = (New-Object IO.StreamReader $rep.GetResponseStream()).ReadToEnd() } finally { $rep.Close() }
+        if ($texte -match '(?m)^ip=([0-9a-fA-F.:]+)') { return $Matches[1] }
+    } catch { }
+    $null
+}
 
 # Une ligne trop longue pour sa colonne passe sur plusieurs, coupée entre deux
 # mots, sans laisser un mot seul à la fin ; au-delà de $Lignes, « … ».
@@ -218,6 +232,8 @@ function Get-Releve($s) {
         $ms = Test-Tcp $ip 443
         if ($null -ne $ms) {
             Add-Ligne 'Réseau' "Internet : joignable en $ms ms" 'ok'
+            $publique = Get-IpPublique
+            if ($publique) { Add-Ligne 'Réseau' "IP publique $publique" }
             if ($null -ne (Test-Tcp (Get-Adresse 'a.rtmp.youtube.com') 1935)) { Add-Ligne 'Réseau' 'RTMP (port 1935) : ouvert' 'ok' }
             else { Add-Ligne 'Réseau' 'RTMP (port 1935) : bloqué' 'attention' 'Port RTMP 1935 bloqué : diffuser en RTMPS (443)' }
         } elseif (-not $ip -and $null -ne (Test-Tcp '1.1.1.1' 443)) { Add-Ligne 'Réseau' 'Internet : joignable, DNS en panne' 'alerte' 'Le DNS ne répond pas : les adresses par nom échouent' }
@@ -341,7 +357,14 @@ function Show-Evenement($g, [int]$l, [int]$h, $s, $r, [string]$Libelle) {
     $clair = & $pinceau ([Drawing.Color]::FromArgb(232, 232, 232))
     $fond = & $pinceau ([Drawing.Color]::FromArgb(235, 22, 24, 28))
     # À droite, en laissant à gauche trois colonnes d'icônes du Bureau.
-    $pw = [float]([Math]::Min(1560 * $k, $l - 360 * $k)); $x0 = [float]($l - $pw - 48 * $k); $y = [float](48 * $k); $bas = [float]($h - 96 * $k)
+    $pw = [float]([Math]::Min(1560 * $k, $l - 360 * $k)); $x0 = [float]($l - $pw - 48 * $k); $y = [float](36 * $k); $bas = [float]($h - 96 * $k)
+    # Le logo Pointe Noire au-dessus du bandeau, lettres claires et ses couleurs
+    # ($codeLogo vient de fond.ps1). Sans lui, l'écran se dessine quand même.
+    try {
+        if (-not ('PointeNoire.Logo' -as [type])) { Add-Type -TypeDefinition $codeLogo -ReferencedAssemblies System.Drawing }
+        [PointeNoire.Logo]::Dessine($g, $x0, [float]$y, [float](30 * $k), [Drawing.Color]::FromArgb(232, 232, 232))
+        $y = [float]($y + 46 * $k)
+    } catch { }
     # Le bandeau : jaune comme dans AVDiagram.
     $g.FillRectangle((& $pinceau ([Drawing.Color]::FromArgb(245, 197, 24))), $x0, $y, $pw, [float](132 * $k))
     $encre = & $pinceau ([Drawing.Color]::FromArgb(20, 20, 20))

@@ -39,6 +39,72 @@ $resultatFichier = Join-Path $perso 'fond-resultat.json'
 $cleFonds = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Wallpapers'
 $cleUne = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\DesktopSpotlight\Settings'
 $parties = [ordered]@{ windows_update = 'Windows Update en pause'; veille = 'Veille coupée'; notifications = 'Notifications coupées'; conseils = 'Conseils Windows coupés'; fond = 'Écran « Mode événement »' }
+# Le logo Pointe Noire, celui des étiquettes d'AVDiagram (src/lib/etiquettes-logos.ts),
+# en vecteurs : net à toutes les définitions, sans fichier à poser.
+$codeLogo = @"
+using System;
+using System.Drawing;
+using System.Drawing.Drawing2D;
+using System.Globalization;
+using System.Text.RegularExpressions;
+namespace PointeNoire {
+  public static class Logo {
+    public const float Largeur = 458.5f, Hauteur = 60.8f;
+    static readonly string[] Lettres = {
+      "M0,60.8V11.3h8.8v4.3h1.3c0.8-1.4,2.1-2.6,3.8-3.7s4.1-1.6,7.3-1.6c2.9,0,5.5,0.7,7.9,2.1s4.4,3.4,5.8,6.2 c1.5,2.7,2.2,6,2.2,9.8v1.1c0,3.8-0.7,7.1-2.2,9.8c-1.5,2.7-3.4,4.8-5.8,6.2c-2.4,1.4-5,2.1-7.9,2.1c-2.1,0-3.9-0.2-5.4-0.8 c-1.4-0.5-2.6-1.1-3.5-1.9s-1.6-1.6-2.1-2.4H9v18.3C9,60.8,0,60.8,0,60.8z M18.5,39.8c2.8,0,5.1-0.9,6.9-2.7 c1.8-1.8,2.7-4.4,2.7-7.8v-0.7c0-3.4-0.9-6-2.8-7.8c-1.9-1.8-4.1-2.7-6.9-2.7s-5.1,0.9-6.9,2.7s-2.8,4.4-2.8,7.8v0.7 c0,3.4,0.9,6,2.8,7.8S15.8,39.8,18.5,39.8L18.5,39.8z",
+      "M124.3,46.6V11.3h8.8v4.6h1.3c0.6-1.2,1.6-2.4,3.2-3.5c1.6-1.1,3.9-1.7,7.1-1.7c2.8,0,5.2,0.6,7.2,1.9 c2.1,1.3,3.7,3,4.8,5.2s1.7,4.8,1.7,7.7v21.1h-9V26.3c0-2.7-0.6-4.6-2-6c-1.3-1.3-3.2-2-5.6-2c-2.8,0-4.9,0.9-6.4,2.7 s-2.3,4.4-2.3,7.6v17.9L124.3,46.6L124.3,46.6z",
+      "M184.2,46.6c-2.3,0-4.2-0.7-5.7-2.2c-1.4-1.5-2.2-3.4-2.2-5.8V18.7h-8.8v-7.4h8.8v-11h9v11h9.7v7.4h-9.7v18.4 c0,1.4,0.7,2.1,2,2.1h6.8v7.4H184.2L184.2,46.6z",
+      "M221.5,47.6c-3.5,0-6.6-0.8-9.3-2.2c-2.7-1.5-4.8-3.6-6.3-6.3c-1.5-2.7-2.2-5.9-2.2-9.6v-0.9c0-3.7,0.7-6.9,2.2-9.6 s3.5-4.8,6.2-6.3s5.7-2.2,9.2-2.2s6.5,0.8,9,2.3s4.6,3.7,6,6.4s2.1,5.9,2.1,9.5v3.1h-25.7c0.1,2.4,1,4.4,2.7,5.9s3.8,2.3,6.3,2.3 s4.4-0.5,5.6-1.6s2.1-2.3,2.7-3.6l7.3,3.8c-0.7,1.2-1.6,2.6-2.9,4c-1.3,1.5-2.9,2.7-5,3.7C227.4,47.1,224.8,47.6,221.5,47.6 L221.5,47.6z M212.9,24.9h16.5c-0.2-2-1-3.7-2.5-4.9c-1.4-1.2-3.3-1.9-5.7-1.9s-4.3,0.6-5.8,1.9 C214.1,21.2,213.3,22.8,212.9,24.9L212.9,24.9z",
+      "M273.8,46.6V11.3h8.8v4.6h1.3c0.6-1.2,1.6-2.4,3.2-3.5c1.6-1.1,3.9-1.7,7.1-1.7c2.8,0,5.2,0.6,7.2,1.9 c2.1,1.3,3.7,3,4.8,5.2c1.1,2.2,1.7,4.8,1.7,7.7v21.1h-9V26.2c0-2.7-0.6-4.6-2-6s-3.2-2-5.6-2c-2.8,0-4.9,0.9-6.4,2.7 s-2.3,4.4-2.3,7.6v17.9L273.8,46.6L273.8,46.6z",
+      "M395,46.6V11.3h8.8v4h1.3c0.5-1.4,1.4-2.5,2.6-3.1s2.6-1,4.2-1h4.3v8h-4.4c-2.3,0-4.1,0.6-5.6,1.8 c-1.5,1.2-2.2,3.1-2.2,5.6v20.1L395,46.6L395,46.6z",
+      "M441.5,47.6c-3.5,0-6.6-0.8-9.3-2.2c-2.7-1.5-4.8-3.6-6.3-6.3c-1.5-2.7-2.2-5.9-2.2-9.6v-0.9c0-3.7,0.7-6.9,2.2-9.6 s3.5-4.8,6.2-6.3c2.7-1.5,5.7-2.2,9.2-2.2s6.5,0.8,9,2.3s4.6,3.7,6,6.4s2.1,5.9,2.1,9.5v3.1h-25.7c0.1,2.4,1,4.4,2.7,5.9 s3.8,2.3,6.3,2.3s4.4-0.5,5.5-1.6c1.2-1.1,2.1-2.3,2.7-3.6l7.3,3.8c-0.7,1.2-1.6,2.6-2.9,4c-1.3,1.5-2.9,2.7-5,3.7 S444.8,47.6,441.5,47.6L441.5,47.6z M432.9,24.9h16.5c-0.2-2-1-3.7-2.5-4.9c-1.5-1.2-3.3-1.9-5.7-1.9s-4.3,0.6-5.8,1.9 C434.1,21.2,433.3,22.8,432.9,24.9z" };
+    static readonly string[] Accents = {
+      "M70.1,0C57.2,0,46.7,10.5,46.7,23.4s10.4,23.4,23.3,23.4s23.3-10.5,23.3-23.4S82.9,0,70.1,0z M70.1,30 c-3.7,0-6.6-3-6.6-6.6s3-6.6,6.6-6.6s6.6,3,6.6,6.6S73.7,30,70.1,30z",
+      "M340.8,0c-12.9,0-23.3,10.5-23.3,23.4s10.4,23.4,23.3,23.4s23.3-10.5,23.3-23.4S353.7,0,340.8,0z M340.8,30 c-3.7,0-6.6-3-6.6-6.6s3-6.6,6.6-6.6s6.6,3,6.6,6.6S344.5,30,340.8,30z" };
+    static readonly float[] Barres = { 102.8f, 373.5f };
+    // Le logo de hauteur h en (x, y) : les lettres dans la couleur donnée, les accents dans les leurs.
+    public static void Dessine(Graphics g, float x, float y, float h, Color lettres) {
+      var etat = g.Save();
+      g.SmoothingMode = SmoothingMode.AntiAlias;
+      g.TranslateTransform(x, y);
+      g.ScaleTransform(h / Hauteur, h / Hauteur);
+      using (var b = new SolidBrush(lettres)) foreach (var d in Lettres) using (var p = Chemin(d)) g.FillPath(b, p);
+      using (var b = new SolidBrush(Color.FromArgb(232, 70, 21))) foreach (var d in Accents) using (var p = Chemin(d)) g.FillPath(b, p);
+      using (var b = new SolidBrush(Color.FromArgb(251, 187, 16))) foreach (var bx in Barres) g.FillRectangle(b, bx, 0f, 9.2f, 46.7f);
+      g.Restore(etat);
+    }
+    // Les commandes de chemin SVG du logo : M, L, H, V, C, S, Z, absolues ou relatives.
+    static GraphicsPath Chemin(string d) {
+      var p = new GraphicsPath(FillMode.Winding);
+      var t = Regex.Matches(d, @"[A-Za-z]|-?(?:\d+\.?\d*|\.\d+)");
+      int i = 0; char c = 'M'; bool rel = false, lisse = false;
+      float x = 0, y = 0, sx = 0, sy = 0, kx = 0, ky = 0;
+      Func<float> n = () => float.Parse(t[i++].Value, CultureInfo.InvariantCulture);
+      while (i < t.Count) {
+        if (char.IsLetter(t[i].Value[0])) {
+          c = t[i++].Value[0]; rel = char.IsLower(c); c = char.ToUpper(c);
+          if (c == 'Z') { p.CloseFigure(); x = sx; y = sy; lisse = false; continue; }
+        }
+        float ox = rel ? x : 0, oy = rel ? y : 0;
+        if (c == 'M') { x = ox + n(); y = oy + n(); sx = x; sy = y; p.StartFigure(); c = 'L'; lisse = false; }
+        else if (c == 'L') { float nx = ox + n(), ny = oy + n(); p.AddLine(x, y, nx, ny); x = nx; y = ny; lisse = false; }
+        else if (c == 'H') { float nx = ox + n(); p.AddLine(x, y, nx, y); x = nx; lisse = false; }
+        else if (c == 'V') { float ny = oy + n(); p.AddLine(x, y, x, ny); y = ny; lisse = false; }
+        else if (c == 'C' || c == 'S') {
+          float x1, y1;
+          if (c == 'C') { x1 = ox + n(); y1 = oy + n(); } else { x1 = lisse ? 2 * x - kx : x; y1 = lisse ? 2 * y - ky : y; }
+          float x2 = ox + n(), y2 = oy + n(), nx = ox + n(), ny = oy + n();
+          p.AddBezier(x, y, x1, y1, x2, y2, nx, ny);
+          kx = x2; ky = y2; x = nx; y = ny; lisse = true;
+        }
+        else i++;
+      }
+      return p;
+    }
+  }
+}
+"@
+
 # Le relevé du mode événement (agent/releve.ps1), posé à côté par fond-pose.ps1.
 $fichierReleve = Join-Path $PSScriptRoot 'releve.ps1'
 if (Test-Path $fichierReleve) { . $fichierReleve }

@@ -450,6 +450,10 @@ class AgentScriptTests(unittest.TestCase):
         # Plus de fond noir muet : l'étiquette en grand, et les actions réussies ou non.
         self.assertIn("Show-Evenement $g $l $h $s $releve $ton[0].ToUpper()", fond)
         self.assertIn("Dernières actions", releve)
+        # Le logo Pointe Noire en vecteurs (fond.ps1), sans lequel l'écran se dessine quand même.
+        self.assertIn('$codeLogo = @"', fond)
+        self.assertIn("try {\n        if (-not ('PointeNoire.Logo' -as [type]))", releve)
+        self.assertIn("IP publique", releve)
         self.assertNotIn("à peine lisible", fond)
         self.assertIn("'Réussi' } else { 'Échec' }", fond)
         self.assertIn("historique", pilote)

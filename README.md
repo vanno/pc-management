@@ -275,10 +275,12 @@ compressé (gzip puis base64) comme les autres scripts.
   normal, orange en mode événement partiel, rouge complet. Les autres écrans
   sont noirs : rien ne part vers un projecteur ou un mur LED. La partie
   `fond` du mode événement remplace ce panneau par l'écran d'un technicien du
-  direct (`agent/releve.ps1`) : un bandeau « MODE ÉVÉNEMENT » avec la
+  direct (`agent/releve.ps1`) : le logo Pointe Noire (en vecteurs, repris des
+  étiquettes d'AVDiagram), un bandeau « MODE ÉVÉNEMENT » avec la
   référence et l'heure du relevé, un cadre « À vérifier » qui remonte les
   points bloquants, puis trois colonnes. Réseau : carte, câble ou Wi-Fi,
-  vitesse du lien, IP, profil Public (NDI bloqué), passerelle, internet, DNS
+  vitesse du lien, IP locale et publique, profil Public (NDI bloqué),
+  passerelle, internet, DNS
   et sortie RTMP (port 1935). Écrans et son : définition et fréquence de
   chaque écran, sortie et entrée son par défaut. Machine : secteur ou
   batterie, mode d'alimentation, disques, mémoire, redémarrage en attente,
