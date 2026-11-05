@@ -14,20 +14,15 @@
 
   Le fond d'origine de chaque écran est gardé dans
   %LOCALAPPDATA%\PointeNoire\fond-avant.json et rendu quand le pilote retire
-  le fond (`retire` dans etat.json). Windows à la une reprendrait la main sur
-  le fond : il est coupé pendant le fond d'état, et rendu au retrait.
-
-  Chaque passage écrit son bilan dans %LOCALAPPDATA%\PointeNoire\fond-resultat.json
-  (le, ok, detail), que fond-pose.ps1 relit pour dire ce qui s'est vraiment
-  passé dans chaque session.
+  le fond (`retire` dans etat.json), avec Windows à la une, coupé entre-temps.
+  Bilan de chaque passage : fond-resultat.json, relu par fond-pose.ps1.
 
   -Detail : la page « État du poste » (icône du Bureau public), en local.
 #>
 param([switch]$Detail)
 
 $ErrorActionPreference = 'Stop'
-# Avant tout : Get-Ton s'en sert aussi pour la page « État du poste », et
-# powershell.exe ne charge pas System.Drawing de lui-même.
+# Avant tout : Get-Ton en a besoin, même pour -Detail.
 Add-Type -AssemblyName System.Drawing
 $base = Join-Path $env:ProgramData 'PointeNoire'
 $etatFond = Join-Path $base 'fond\etat.json'
@@ -156,21 +151,31 @@ namespace PointeNoire {
     int GetPosition();
   }
   [ComImport, Guid("C2CF3110-460E-4fc1-B9D0-8A1C0C9CC4BD")] public class DesktopWallpaperClass { }
+  public class Ecran { public string Id; public int Gauche, Haut, Largeur, Hauteur; }
+  // PowerShell n'appelle pas une interface COM sans IDispatch : tout passe par ici.
   public static class Ecrans {
     [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
-    public static IDesktopWallpaper Fonds() { return (IDesktopWallpaper)new DesktopWallpaperClass(); }
+    static IDesktopWallpaper F() { return (IDesktopWallpaper)new DesktopWallpaperClass(); }
+    public static Ecran[] Liste() {
+      IDesktopWallpaper w = F();
+      var l = new System.Collections.Generic.List<Ecran>();
+      uint n = w.GetMonitorDevicePathCount();
+      for (uint i = 0; i < n; i++) {
+        string id = w.GetMonitorDevicePathAt(i);
+        // Un écran déclaré mais éteint n'a pas de rectangle.
+        try { Rect r = w.GetMonitorRECT(id); l.Add(new Ecran { Id = id, Gauche = r.Left, Haut = r.Top, Largeur = r.Right - r.Left, Hauteur = r.Bottom - r.Top }); } catch (Exception) { }
+      }
+      return l.ToArray();
+    }
+    public static string Lire(string id) { try { return F().GetWallpaper(id) ?? ""; } catch (Exception) { return ""; } }
+    public static void Poser(string id, string chemin) { F().SetWallpaper(id, chemin); }
+    public static int Position() { return F().GetPosition(); }
+    public static void Placer(int position) { F().SetPosition(position); }
   }
 }
 '@
 [void][PointeNoire.Ecrans]::SetProcessDPIAware()
-$dw = [PointeNoire.Ecrans]::Fonds()
-$ecrans = @()
-for ($i = 0; $i -lt $dw.GetMonitorDevicePathCount(); $i++) {
-    $id = $dw.GetMonitorDevicePathAt($i)
-    # Un écran déclaré mais éteint n'a pas de rectangle.
-    try { $r = $dw.GetMonitorRECT($id) } catch { continue }
-    $ecrans += [pscustomobject]@{ id = $id; l = $r.Right - $r.Left; h = $r.Bottom - $r.Top; principal = ($r.Left -eq 0 -and $r.Top -eq 0) }
-}
+$ecrans = @([PointeNoire.Ecrans]::Liste() | ForEach-Object { [pscustomobject]@{ id = $_.Id; l = $_.Largeur; h = $_.Hauteur; principal = ($_.Gauche -eq 0 -and $_.Haut -eq 0) } })
 if (-not (Test-Path $perso)) { New-Item -ItemType Directory -Path $perso -Force | Out-Null }
 $s = Get-Etat
 $bilan = $null
@@ -183,9 +188,9 @@ if (-not $ecrans.Count) {
         foreach ($e in $ecrans) {
             $f = ($avant.ecrans | Where-Object id -eq $e.id | Select-Object -First 1).fond
             if (-not $f) { $f = $avant.defaut }
-            if ($f -and (Test-Path $f)) { $dw.SetWallpaper($e.id, $f) }
+            if ($f -and (Test-Path $f)) { [PointeNoire.Ecrans]::Poser($e.id, $f) }
         }
-        $dw.SetPosition([int]$avant.position)
+        [PointeNoire.Ecrans]::Placer([int]$avant.position)
         # Windows à la une, s'il était là avant le fond d'état.
         if ($null -ne $avant.une -and (Test-Path $cleUne)) { Set-ItemProperty -Path $cleUne -Name EnabledState -Value ([int]$avant.une) -Type DWord }
         if ($null -ne $avant.type) { Set-ItemProperty -Path $cleFonds -Name BackgroundType -Value ([int]$avant.type) -Type DWord }
@@ -195,18 +200,17 @@ if (-not $ecrans.Count) {
     Get-ChildItem $perso -Filter 'fond-*.png' -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
 } else {
 
-# Le fond d'origine, une seule fois : c'est lui que le retrait rend, avec le
-# type de fond (image, diaporama, Windows à la une).
+# Le fond d'origine, une seule fois : c'est lui que le retrait rend.
 $type0 = Get-Valeur $cleFonds 'BackgroundType'
 $une0 = Get-Valeur $cleUne 'EnabledState'
 $ecrase = 0
 if (-not (Test-Path $avantFichier)) {
-    $garde = @($ecrans | ForEach-Object { [ordered]@{ id = $_.id; fond = $dw.GetWallpaper($_.id) } })
+    $garde = @($ecrans | ForEach-Object { [ordered]@{ id = $_.id; fond = [PointeNoire.Ecrans]::Lire($_.id) } })
     $defaut = (Get-ItemProperty 'HKCU:\Control Panel\Desktop' -Name WallPaper -ErrorAction SilentlyContinue).WallPaper
-    $avant = [ordered]@{ ecrans = $garde; defaut = $defaut; position = $dw.GetPosition(); type = $type0; une = $une0 }
+    $avant = [ordered]@{ ecrans = $garde; defaut = $defaut; position = [PointeNoire.Ecrans]::Position(); type = $type0; une = $une0 }
     [IO.File]::WriteAllText($avantFichier, ($avant | ConvertTo-Json -Depth 4), (New-Object System.Text.UTF8Encoding $false))
 } else {
-    # Gardé par une version sans le type de fond : on le complète avant d'y toucher.
+    # Gardé par une version sans le type de fond : complété.
     $avant = Read-Json $avantFichier
     if ($avant -and $avant.PSObject.Properties.Name -notcontains 'type') {
         $avant | Add-Member -NotePropertyName type -NotePropertyValue $type0
@@ -215,7 +219,7 @@ if (-not (Test-Path $avantFichier)) {
     }
     # Déjà affiché une fois : un écran qui n'a plus notre image, Windows l'a remplacée.
     if (Get-ChildItem $perso -Filter 'fond-*.png' -ErrorAction SilentlyContinue) {
-        $ecrase = @($ecrans | Where-Object { [IO.Path]::GetFileName([string]$dw.GetWallpaper($_.id)) -notlike 'fond-*.png' }).Count
+        $ecrase = @($ecrans | Where-Object { [IO.Path]::GetFileName([PointeNoire.Ecrans]::Lire($_.id)) -notlike 'fond-*.png' }).Count
     }
 }
 
@@ -268,17 +272,17 @@ foreach ($e in $ecrans) {
     $bmp.Save($chemin, [Drawing.Imaging.ImageFormat]::Png)
     $bmp.Dispose()
     $images += $chemin
-    $dw.SetWallpaper($e.id, $chemin)
+    [PointeNoire.Ecrans]::Poser($e.id, $chemin)
 }
 # 4 : remplir l'écran (DWPOS_FILL).
-$dw.SetPosition(4)
+[PointeNoire.Ecrans]::Placer(4)
 Get-ChildItem $perso -Filter 'fond-*.png' | Where-Object { $images -notcontains $_.FullName } | Remove-Item -Force -ErrorAction SilentlyContinue
 # La preuve : ce que Windows affiche vraiment, relu écran par écran.
 $noms = @($images | ForEach-Object { [IO.Path]::GetFileName($_) })
-$refuses = @($ecrans | Where-Object { $noms -notcontains [IO.Path]::GetFileName([string]$dw.GetWallpaper($_.id)) }).Count
+$refuses = @($ecrans | Where-Object { $noms -notcontains [IO.Path]::GetFileName([PointeNoire.Ecrans]::Lire($_.id)) }).Count
 if ($refuses) { throw "Windows n'a pas pris le fond sur $refuses écran(s) sur $($ecrans.Count)" }
 $bilan = "affiché sur $($ecrans.Count) écran(s)"
-# Un fond image ne vaut que pour le bureau virtuel actif (Windows 11) : à dire.
+# Un fond image ne vaut que pour le bureau virtuel actif.
 $bureaux = Get-Valeur 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VirtualDesktops' 'VirtualDesktopIDs'
 if ($bureaux -and $bureaux.Length -ge 32) { $bilan += ", sur le bureau virtuel actif seulement ($([int]($bureaux.Length / 16)) bureaux)" }
 if ($aLaUne) { $bilan += ', Windows à la une coupé jusqu''au retrait' }
