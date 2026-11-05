@@ -90,7 +90,8 @@ function Get-Lignes($s) {
     if ($s.actives.Count) {
         foreach ($k in $parties.Keys) {
             $t = $parties[$k]
-            if ($k -eq 'windows_update' -and $s.wu) { $t += " jusqu'au $(Get-Date2 $s.wu)" }
+            # La date de la pause, seulement si la partie est active : sinon « en pause jusqu'au … : normal ».
+            if ($k -eq 'windows_update' -and $s.wu -and $s.actives -contains $k) { $t += " jusqu'au $(Get-Date2 $s.wu)" }
             $l.Add($(if ($s.actives -contains $k) { "■ $t" } else { "□ $($t -replace ' (en pause|coupée?s?)$', '' -replace '^Écran « Mode événement »$', 'Écran') : normal" }))
         }
     } else { $l.Add('Mode événement : inactif') }

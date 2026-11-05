@@ -441,6 +441,10 @@ class AgentScriptTests(unittest.TestCase):
         self.assertIn("$result.fond_a_poser = $true", pilote)
         self.assertIn("posé pour l''événement", pilote)
         self.assertIn("son écran l''indique jusqu''à la fin du mode", pilot.WALLPAPER_INSTALLER.read_text(encoding="utf-8"))
+        # Essai sous Windows : pas de « Windows Update en pause jusqu'au … : normal » quand la partie est rendue.
+        self.assertIn("$s.wu -and $s.actives -contains $k", fond.split("function Get-Lignes", 1)[1].split("\nfunction ", 1)[0])
+        # Un échec garde à l'écran la phrase qui dit pourquoi, pas seulement la première.
+        self.assertIn("pas retirées|[Rr]efusé|échec|erreur", pilote.split("function Update-Fond", 1)[1])
 
     def test_cleanup_names_what_windows_refuses(self):
         """« Tentative d'exécution d'une opération non autorisée » sans plus :

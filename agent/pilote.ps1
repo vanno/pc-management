@@ -779,7 +779,11 @@ function Update-Fond {
         $le = (Get-Date).ToString('o')
         $e | Add-Member -NotePropertyName derniere -NotePropertyValue ([ordered]@{ texte = $t; le = $le }) -Force
         # Les cinq dernières actions, réussies ou non, pour l'écran du poste.
-        $d = ([string]$result.detail -split '\. ', 2)[0] -replace '^mode événement ', ''
+        # La première phrase ; pour un échec, celle qui dit pourquoi quand il y en a une.
+        $phrases = @([string]$result.detail -split '\. ' | Where-Object { $_ })
+        $d = [string]$phrases[0]
+        if (-not $result.ok) { $pourquoi = @($phrases | Where-Object { $_ -match 'pas retirées|[Rr]efusé|échec|erreur' }); if ($pourquoi.Count) { $d = [string]$pourquoi[0] } }
+        $d = $d -replace '^mode événement ', ''
         $nom = @{ evenement = 'Mode événement'; nettoyage = 'Allègement'; supervision = 'Suivi'; alimentation = 'Alimentation'; reseau = 'Réseau'; script = 'Script'; fichier = 'Fichier' }[[string]$result.op]
         if (-not $nom) { $nom = [string]$result.op }
         $h = "${nom} : $d"
