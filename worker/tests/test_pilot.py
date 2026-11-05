@@ -502,6 +502,24 @@ class AgentScriptTests(unittest.TestCase):
             text = path.read_text(encoding="utf-8-sig")
             self.assertNotRegex(text, r"@\(\$\w+\.alertes\)", path.name)
 
+    def test_cleanup_keeps_its_power_plan(self):
+        """PN09, 2026-11-05 : « Pointe Noire production » actif au lieu du plan
+        attendu. Le plan créé n'était pas gardé : le contrôle attendait
+        Performances élevées, et chaque allègement en créait un de plus."""
+        pilote = pilot.AGENT_SCRIPT.read_text(encoding="utf-8")
+        corps = pilote.split("function Enable-Nettoyage", 1)[1].split("\nfunction ", 1)[0]
+        apres = corps.split("$plan = Set-PlanProduction $etat", 1)[1]
+        self.assertTrue(apres.lstrip().split("\n", 2)[1].strip().startswith("Write-Utf8 $fichierNettoyage"), "plan gardé aussitôt")
+        plan = pilote.split("function Set-PlanProduction", 1)[1].split("\nfunction ", 1)[0]
+        # Un plan déjà là sert avant d'en créer un, et les doublons partent.
+        self.assertLess(plan.index("Get-PlansProduction"), plan.index("/duplicatescheme"))
+        self.assertIn("$etat.plan.cree = $guid", plan.split("/duplicatescheme", 1)[0])
+        self.assertIn("ForEach-Object { & powercfg.exe /delete $_", plan.split("/setactive $guid", 1)[1])
+        retour = pilote.split("function Disable-Nettoyage", 1)[1].split("\nfunction ", 1)[0]
+        self.assertIn("@(Get-PlansProduction) + $etat.plan.cree", retour)
+        self.assertIn("$_ -ne $etat.plan.avant", retour)
+        self.assertEqual(pilote.count("'Pointe Noire production'"), 1)
+
     def test_cleanup_names_what_windows_refuses(self):
         """« Tentative d'exécution d'une opération non autorisée » sans plus :
         chaque écriture du nettoyage est gardée, et son refus nommé."""

@@ -601,16 +601,33 @@ function Get-PlanActif {
     return $null
 }
 
+$nomPlan = 'Pointe Noire production'
+
+# Avant le 2026-11-05, chaque allègement créait ce plan sans le garder.
+function Get-PlansProduction {
+    foreach ($l in @(& powercfg.exe /list)) {
+        $m = [regex]::Match([string]$l, '([0-9a-fA-F-]{36})\s+\((.+)\)')
+        if ($m.Success -and $m.Groups[2].Value.Trim() -eq $nomPlan) { $m.Groups[1].Value.ToLower() }
+    }
+}
+
 function Set-PlanProduction($etat) {
     if (-not $etat.plan) { $etat.plan = [ordered]@{ avant = (Get-PlanActif); cree = $null } }
     $guid = $etat.plan.cree
+    $faits = @(Get-PlansProduction)
+    if ($faits -notcontains $guid) {
+        # Un plan laissé par un allègement d'avant : l'actif s'il en est un.
+        $a = Get-PlanActif
+        $guid = $(if ($faits -contains $a) { $a } else { $faits | Select-Object -First 1 })
+        $etat.plan.cree = $guid
+    }
     if (-not $guid) {
         $texte = (& powercfg.exe /duplicatescheme $planOptimal) -join ' '
         $m = [regex]::Match($texte, '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}')
         if ($LASTEXITCODE -eq 0 -and $m.Success) {
             $guid = $m.Value.ToLower()
             $etat.plan.cree = $guid
-            & powercfg.exe /changename $guid 'Pointe Noire production' | Out-Null
+            & powercfg.exe /changename $guid $nomPlan | Out-Null
         } else {
             $guid = $planEleve
         }
@@ -621,6 +638,7 @@ function Set-PlanProduction($etat) {
     & powercfg.exe /setacvalueindex $guid SUB_PCIEXPRESS ASPM 0 | Out-Null
     & powercfg.exe /setactive $guid | Out-Null
     if ($LASTEXITCODE -ne 0) { return 'plan d''alimentation inchangé' }
+    $faits | Where-Object { $_ -ne $guid } | ForEach-Object { & powercfg.exe /delete $_ | Out-Null }
     if ($guid -eq $planEleve) { return 'plan Performances élevées' }
     return 'plan Performances optimales'
 }
@@ -660,6 +678,8 @@ function Enable-Nettoyage([bool]$Applications) {
     Write-Utf8 $fichierNettoyage ($etat | ConvertTo-Json -Depth 6)
 
     $plan = Set-PlanProduction $etat
+    # Le plan choisi est gardé : le contrôle le relit, le retour le supprime.
+    Write-Utf8 $fichierNettoyage ($etat | ConvertTo-Json -Depth 6)
     # Chaque refus de Windows est nommé, et le reste s'applique quand même.
     $refus = @()
     $services = 0
@@ -717,7 +737,7 @@ function Disable-Nettoyage {
     if ($etat.plan -and $etat.plan.avant) {
         & powercfg.exe /setactive $etat.plan.avant | Out-Null
         if ($LASTEXITCODE -ne 0) { $echecs += 'plan d''alimentation' }
-        elseif ($etat.plan.cree) { & powercfg.exe /delete $etat.plan.cree | Out-Null }
+        else { @(Get-PlansProduction) + $etat.plan.cree | Where-Object { $_ -and $_ -ne $etat.plan.avant } | Sort-Object -Unique | ForEach-Object { & powercfg.exe /delete $_ | Out-Null } }
     }
     $services = 0
     foreach ($q in @($etat.services.PSObject.Properties)) {
