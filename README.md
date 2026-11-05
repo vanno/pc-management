@@ -285,7 +285,9 @@ compressé (gzip puis base64) comme les autres scripts.
   rendu au retrait. Chaque passage relit le fond que Windows affiche et écrit
   son bilan dans `%LOCALAPPDATA%\PointeNoire\fond-resultat.json` ;
   `fond-pose.ps1` attend ce bilan 30 secondes dans chaque session ouverte, et
-  la tâche AVDiagram passe en échec si une session n'a pas pris le fond.
+  la tâche AVDiagram passe en échec si une session n'a pas pris le fond. Avec
+  plusieurs bureaux virtuels, Windows ne pose le fond que sur le bureau actif :
+  le bilan le dit.
 - Mur d'écrans (`agent/vignette.ps1`, posé par `agent/vignette-pose.ps1`) :
   AVDiagram tire un jeton `pnv_` par poste, qui ne permet que de poser l'image
   de son écran. Une tâche PointeNoire-Vignette (groupe Utilisateurs, chaque

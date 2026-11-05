@@ -278,6 +278,9 @@ $noms = @($images | ForEach-Object { [IO.Path]::GetFileName($_) })
 $refuses = @($ecrans | Where-Object { $noms -notcontains [IO.Path]::GetFileName([string]$dw.GetWallpaper($_.id)) }).Count
 if ($refuses) { throw "Windows n'a pas pris le fond sur $refuses écran(s) sur $($ecrans.Count)" }
 $bilan = "affiché sur $($ecrans.Count) écran(s)"
+# Un fond image ne vaut que pour le bureau virtuel actif (Windows 11) : à dire.
+$bureaux = Get-Valeur 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VirtualDesktops' 'VirtualDesktopIDs'
+if ($bureaux -and $bureaux.Length -ge 32) { $bilan += ", sur le bureau virtuel actif seulement ($([int]($bureaux.Length / 16)) bureaux)" }
 if ($aLaUne) { $bilan += ', Windows à la une coupé jusqu''au retrait' }
 if ($ecrase) { $bilan += ", remis sur $ecrase écran(s) où Windows l'avait remplacé" }
 }
