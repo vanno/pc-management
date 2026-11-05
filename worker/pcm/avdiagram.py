@@ -139,11 +139,15 @@ class AvdClient:
         Le fichier porte une adresse de téléchargement signée."""
         return self._request("GET", f"/api/v1/postes/envois/{envoi_id}")
 
-    def finish_task(self, task_id: str, ok: bool, result: str) -> bool:
-        """Rend le résultat d'une tâche. False si AVDiagram ne l'attend plus
-        (annulée, ou expirée après 30 minutes)."""
+    def finish_task(self, task_id: str, ok: bool, result: str, controle: dict | None = None) -> bool:
+        """Rend le résultat d'une tâche, et ce que le contrôle a relu dans
+        Windows (pilot.verdict). False si AVDiagram ne l'attend plus (annulée,
+        ou expirée après 30 minutes)."""
+        body: dict = {"status": "done" if ok else "failed", "result": result[:4000]}
+        if controle is not None:
+            body["controle"] = controle
         try:
-            self._request("POST", f"/api/v1/postes/taches/{task_id}", {"status": "done" if ok else "failed", "result": result[:4000]})
+            self._request("POST", f"/api/v1/postes/taches/{task_id}", body)
             return True
         except AvdError as exc:
             if exc.status == 409:

@@ -119,6 +119,8 @@ class Service:
         self.pulse_interval = pulse_interval
         self.sleep = sleep
         self.pilot_script = pilot_script
+        # agent/controle.ps1, relu à chaque contrôle sauf s'il est donné ici.
+        self.check_script: str | None = None
         self.seen: list[dict] = []
         parallel = bool(getattr(mesh, "parallel", False))
         self.concurrency = max(1, concurrency or 4) if parallel else 1
@@ -230,16 +232,28 @@ class Service:
             self._do(task, by_tag)
 
     def _do(self, task: dict, by_tag: dict[str, Device]) -> None:
+        controle = None
         try:
-            ok, result = self.run_task(task, by_tag)
+            ok, result, *rest = self.run_task(task, by_tag)
+            controle = rest[0] if rest else None
         except (MeshError, AvdError) as exc:
             ok, result = False, _short(str(exc))
         except Exception as exc:  # une tâche ne fait pas tomber les autres
             ok, result = False, _short(f"Erreur inattendue de l'outil : {type(exc).__name__} : {exc}")
-        kept = self.avd.finish_task(task["id"], ok, result)
+        kept = self.avd.finish_task(task["id"], ok, result, controle) if controle else self.avd.finish_task(task["id"], ok, result)
         state = "fait" if ok else "échec"
+        if controle:
+            state += f", contrôle {controle['etat']}"
         suffix = "" if kept else " (AVDiagram ne l'attendait plus)"
         self.log(f"tâche {task['id']} {task.get('action')} {task.get('asset_tag')} : {state} : {result}{suffix}")
+
+    def _checked(self, device: Device, action: str, params: dict, done: tuple) -> tuple:
+        """Après une action faite, son effet relu dans Windows (pilot.check)."""
+        ok, text = done[0], done[1]
+        if not ok:
+            return done
+        controle = pilot.check(self.mesh, device.id, pilot.CHECKED[action], params, inv.new_nonce, script=self.check_script)
+        return pilot.with_check(ok, text, controle)
 
     def _maintenance(self, by_tag: dict[str, Device]) -> None:
         """La version du serveur MeshCentral (une fois par jour) et les tâches planifiées."""
@@ -293,7 +307,8 @@ class Service:
             stop.set()
             thread.join(5)
 
-    def run_task(self, task: dict, by_tag: dict[str, Device]) -> tuple[bool, str]:
+    def run_task(self, task: dict, by_tag: dict[str, Device]) -> tuple:
+        """(ok, texte), ou (ok, texte, contrôle) pour une action relue dans Windows."""
         action = task.get("action")
         tag = (task.get("asset_tag") or "").strip().upper()
         if action not in ACTIONS:
@@ -316,13 +331,15 @@ class Service:
         if action == "alimentation":
             return pilot.power(self.mesh, device.id, params, inv.new_nonce, script=self.pilot_script)
         if action == "supervision":
-            return pilot.supervision(self.mesh, device.id, task.get("unit_id") or "", params, self.avd, inv.new_nonce, script=self.pilot_script)
+            done = pilot.supervision(self.mesh, device.id, task.get("unit_id") or "", params, self.avd, inv.new_nonce, script=self.pilot_script)
+            return self._checked(device, action, params, done)
         if action == "envoi":
             ok, text = pilot.envoi(self.mesh, device.id, params, self.avd, inv.new_nonce, script=self.pilot_script)
             # La sortie d'un script garde ses lignes.
             return ok, text if len(text) <= RESULT_MAX else text[: RESULT_MAX - 1] + "…"
         if action == "mode_evenement":
-            return pilot.event_mode(self.mesh, device.id, params, inv.new_nonce, script=self.pilot_script)
+            done = pilot.event_mode(self.mesh, device.id, params, inv.new_nonce, script=self.pilot_script)
+            return self._checked(device, action, params, done)
         if action == "fond":
             return pilot.wallpaper(self.mesh, device.id, tag, params, inv.new_nonce)
         if action == "vignette":
@@ -330,7 +347,8 @@ class Service:
         if action == "message":
             return pilot.message(self.mesh, device.id, device.name, params, inv.new_nonce, script=self.pilot_script)
         if action == "nettoyage":
-            return pilot.cleanup(self.mesh, device.id, params, inv.new_nonce, script=self.pilot_script)
+            done = pilot.cleanup(self.mesh, device.id, params, inv.new_nonce, script=self.pilot_script)
+            return self._checked(device, action, params, done)
         if action == "diagnostic":
             ok, text, data = pilot.diagnostic(self.mesh, device.id, params, inv.new_nonce)
             if data is not None:

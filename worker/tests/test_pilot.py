@@ -61,6 +61,12 @@ class CommandTests(unittest.TestCase):
     def test_wallpaper_installer_and_script_stay_under_the_agent_limit(self):
         body = {"op": "fond", "actif": True, "reference": "PN-UK", "script": pilot.pack(pilot.WALLPAPER_SCRIPT.read_bytes())}
         cmd = pilot.build_command(body, "ab12", script=pilot.WALLPAPER_INSTALLER.read_text(encoding="utf-8"))
+        # La sonde passe à 22 100 caractères en production : 18 000 garde de la marge.
+        self.assertLess(len(cmd), 18_000)
+
+    def test_check_script_travels_alone_under_the_same_limit(self):
+        body = {"op": "controle", "quoi": "evenement", "actif": True, "parties": list(pilot.EVENT_PARTS)}
+        cmd = pilot.build_command(body, "ab12", script=pilot.CHECK_SCRIPT.read_text(encoding="utf-8"))
         self.assertLess(len(cmd), 16_000)
 
     def test_thumbnail_installer_and_script_stay_under_the_agent_limit(self):
@@ -300,3 +306,85 @@ class CleanupTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CheckTests(unittest.TestCase):
+    """Le contrôle : l'effet réel d'une action, relu dans Windows par agent/controle.ps1."""
+
+    def test_verdict(self):
+        ok = {"nom": "Veille", "ok": True, "constat": "jamais"}
+        self.assertEqual(pilot.verdict([ok])["etat"], "verifie")
+        self.assertEqual(pilot.verdict([ok, {"nom": "Notifications", "ok": False, "constat": "encore actives"}])["etat"], "pas_applique")
+        flou = pilot.verdict([ok, {"nom": "Fond noir", "ok": None, "constat": "pas de réponse"}], "raison")
+        self.assertEqual((flou["etat"], flou["raison"]), ("non_verifie", "raison"))
+        vide = pilot.verdict([], "Aucune session ouverte.")
+        self.assertEqual(vide, {"etat": "non_verifie", "points": [], "raison": "Aucune session ouverte."})
+        # Une raison ne s'ajoute qu'à un contrôle non vérifié.
+        self.assertNotIn("raison", pilot.verdict([ok], "raison"))
+
+    def test_verdict_cleans_what_the_agent_sends(self):
+        points = [{"nom": "  Veille  ", "ok": "oui", "constat": None}, {"nom": ""}, "texte", {"ok": True}, {"nom": "x" * 80, "ok": True, "constat": "c" * 400}]
+        v = pilot.verdict(points)
+        self.assertEqual(v["points"][0], {"nom": "Veille", "ok": None, "constat": ""})
+        self.assertEqual((len(v["points"]), len(v["points"][1]["nom"]), len(v["points"][1]["constat"])), (2, 60, 300))
+        self.assertEqual(len(pilot.verdict([{"nom": f"p{i}", "ok": True} for i in range(50)])["points"]), pilot.CHECK_POINTS)
+        self.assertEqual(pilot.verdict(None)["etat"], "non_verifie")
+
+    def test_check_sends_the_parts_to_the_check_script(self):
+        mesh = FakeMesh({"controle": [{"ok": True, "points": [{"nom": "Notifications", "ok": True, "constat": "vannh : coupées, relu par Windows"}]}]})
+        v = pilot.check(mesh, "n", "evenement", {"actif": True, "parties": ["notifications", "registre", "notifications"]}, nonces(), script="'x'")
+        self.assertEqual(v["etat"], "verifie")
+        self.assertEqual(mesh.calls[0], ({"op": "controle", "quoi": "evenement", "actif": True, "parties": ["notifications"]}, pilot.CHECK_TIMEOUT))
+
+    def test_check_that_cannot_run_is_not_verified(self):
+        mesh = FakeMesh({"controle": [MeshError("Sans réponse"), {"ok": False, "detail": "contrôle inconnu : x", "points": []}]})
+        v = pilot.check(mesh, "n", "supervision", {"actif": False}, nonces(), script="'x'")
+        self.assertEqual((v["etat"], v["raison"]), ("non_verifie", "Contrôle impossible : Sans réponse"))
+        self.assertEqual(mesh.calls[0][0], {"op": "controle", "quoi": "supervision", "actif": False})
+        v = pilot.check(mesh, "n", "supervision", {"actif": True}, nonces(), script="'x'")
+        self.assertEqual(v["raison"], "Contrôle interrompu : contrôle inconnu : x")
+
+    def test_action_not_applied_fails_with_what_is_missing(self):
+        controle = pilot.verdict([{"nom": "Veille", "ok": True, "constat": "jamais"}, {"nom": "Notifications", "ok": False, "constat": "vannh : réglé, mais Windows affiche encore les notifications"}])
+        ok, text, c = pilot.with_check(True, "Mode événement actif : veille coupée.", controle)
+        self.assertFalse(ok)
+        self.assertEqual(text, "Mode événement actif : veille coupée. Pas appliqué dans Windows. Notifications : vannh : réglé, mais Windows affiche encore les notifications")
+        self.assertIs(c, controle)
+        self.assertEqual(pilot.with_check(True, "Sonde retirée", pilot.verdict([]))[:2], (True, "Sonde retirée"))
+
+    def test_wallpaper_sessions_become_the_check(self):
+        mesh = FakeMesh({"fond": [
+            {"ok": True, "detail": "fond d'état posé. Session de vannh : affiché sur 2 écran(s)", "points": [{"nom": "Session de vannh", "ok": True, "constat": "affiché sur 2 écran(s)"}]},
+            {"ok": True, "detail": "fond d'état retiré. Aucun compte ouvert.", "points": []},
+            {"ok": True, "detail": "pas de fond d'état sur ce poste"},
+        ]})
+        ok, text, controle = pilot.wallpaper(mesh, "n", "PN09", {"actif": True}, nonces(), script="'x'")
+        self.assertEqual((ok, controle["etat"]), (True, "verifie"))
+        ok, text, controle = pilot.wallpaper(mesh, "n", "PN09", {"actif": False}, nonces(), script="'x'")
+        self.assertEqual((controle["etat"], controle["raison"]), ("non_verifie", "Aucune session ouverte sur le poste : rien à relire."))
+        self.assertEqual(len(pilot.wallpaper(mesh, "n", "PN09", {"actif": False}, nonces(), script="'x'")), 2)
+
+    def test_check_script_reads_what_the_pilot_writes(self):
+        """controle.ps1 relit les mêmes réglages que ceux que pilote.ps1 pose."""
+        pilote = pilot.AGENT_SCRIPT.read_text(encoding="utf-8")
+        controle = pilot.CHECK_SCRIPT.read_text(encoding="utf-8")
+        for name in ("$cleWU", "$valeursWU", "$cleAU", "$cleToast", "$cleNotif", "$cleCdm", "$cleScoobe", "$valeursConseils", "$toutesParties", "$planEleve"):
+            line = re.compile(r"^" + re.escape(name) + r" = .*$", re.M)
+            self.assertEqual(line.search(controle).group(0), line.search(pilote).group(0), name)
+        block = re.compile(r"^\$reglagesNettoyage = @\((.*?)^\)", re.M | re.S)
+        rows = lambda text: re.findall(r"@\('[^']+', '[^']+', \d\)", block.search(text).group(1))
+        self.assertEqual(rows(controle), rows(pilote))
+        self.assertEqual(len(rows(pilote)), 7)
+        veille = re.findall(r"@\('(SUB_\w+)', '(\w+)'", controle)
+        self.assertEqual(veille, re.findall(r"@\('(SUB_\w+)', '(\w+)'\)", pilote.split("$reglagesVeille = ", 1)[1].split("\n", 1)[0]))
+        # Le retour à la normale garde une copie que le contrôle relit.
+        self.assertIn("mode-evenement-rendu.json", pilote)
+        self.assertIn("nettoyage-rendu.json", pilote)
+
+    def test_check_script_changes_no_setting(self):
+        text = pilot.CHECK_SCRIPT.read_text(encoding="utf-8")
+        for verb in ("Set-ItemProperty", "New-ItemProperty", "Remove-ItemProperty", "powercfg.exe /set", "Disable-ScheduledTask", "Enable-ScheduledTask", "Stop-Service", "Set-Service", "Remove-AppxPackage"):
+            self.assertNotIn(verb, text)
+        # Sa seule écriture : la tâche temporaire de lecture dans les sessions, retirée aussitôt.
+        self.assertEqual(text.count("Register-ScheduledTask"), 1)
+        self.assertIn("Unregister-ScheduledTask -TaskName $tacheSonde", text)

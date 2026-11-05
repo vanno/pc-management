@@ -280,7 +280,14 @@ compressé (gzip puis base64) comme les autres scripts.
   du Bureau public ouvre le détail en local. Le fond d'origine de chaque compte
   est gardé dans `%LOCALAPPDATA%\PointeNoire\fond-avant.json` et rendu au
   retrait ; un compte fermé le retrouve à sa prochaine session, la tâche part
-  7 jours après.
+  7 jours après. Windows à la une remettrait sa photo par-dessus : il est
+  coupé pendant le fond d'état (`BackgroundType` et `DesktopSpotlight`) et
+  rendu au retrait. Chaque passage relit le fond que Windows affiche et écrit
+  son bilan dans `%LOCALAPPDATA%\PointeNoire\fond-resultat.json` ;
+  `fond-pose.ps1` attend ce bilan 30 secondes dans chaque session ouverte, et
+  la tâche AVDiagram passe en échec si une session n'a pas pris le fond. Avec
+  plusieurs bureaux virtuels, Windows ne pose le fond que sur le bureau actif :
+  le bilan le dit.
 - Mur d'écrans (`agent/vignette.ps1`, posé par `agent/vignette-pose.ps1`) :
   AVDiagram tire un jeton `pnv_` par poste, qui ne permet que de poser l'image
   de son écran. Une tâche PointeNoire-Vignette (groupe Utilisateurs, chaque
@@ -303,6 +310,37 @@ compressé (gzip puis base64) comme les autres scripts.
   l'agent revenu (jusqu'à 5 minutes). Sans retour automatique (réseau fermé
   d'une régie), le poste ne répond plus jusqu'à son retour sur un réseau qui
   joint MeshCentral.
+
+### Contrôle : l'effet réel, relu dans Windows
+
+Après le mode événement, le nettoyage et la sonde, le worker lance
+`agent/controle.ps1` (à part de `pilote.ps1`, compte SYSTEM). Il ne change
+aucun réglage : il relit ce que l'action devait changer et rend un point par
+partie (`nom`, `ok`, `constat`), que la tâche AVDiagram garde dans `controle` :
+
+| Partie | Ce qui est relu |
+|---|---|
+| Windows Update | la fin de pause dans `UX\Settings` (dans le futur) et `NoAutoRebootWithLoggedOnUsers` |
+| Veille | `powercfg /q` du plan actif, et une stratégie de groupe qui imposerait une durée (`Policies\Microsoft\Power\PowerSettings`) |
+| Notifications | le registre de chaque compte, puis Windows lui-même dans chaque session ouverte (`ToastNotificationManager`, réglage `DisabledForUser`) |
+| Conseils Windows | le registre de chaque compte |
+| Fond noir | la tâche PointeNoire-Fond relancée, le bilan de chaque session (`noir`) |
+| Nettoyage | plan actif, services (désactivés et arrêtés), tâches, réglages, applications encore installées |
+| Sonde | son premier passage (10 s après la pose), son code de sortie, aucune mesure en attente |
+
+La lecture dans les sessions passe par une tâche temporaire du groupe
+Utilisateurs (PointeNoire-Controle, par `wscript`), retirée aussitôt. Le
+retour à la normale est comparé à l'état d'avant : `pilote.ps1` en garde une
+copie (`mode-evenement-rendu.json`, `nettoyage-rendu.json`), relue dans les
+10 minutes. Le fond d'état rend son propre contrôle : le bilan de chaque
+session ouverte.
+
+État du contrôle : `verifie` (chaque point relu tel que voulu),
+`pas_applique` (Windows n'en applique pas un : la tâche passe en échec, avec
+ce qui manque) ou `non_verifie` (contrôle impossible, aucune session ouverte,
+ou un point illisible). Un compte dont la session s'est fermée pendant
+l'événement ne retrouve pas ses notifications ni ses conseils au retour : le
+contrôle le signale.
 
 Le battement envoie aussi, pour chaque poste, le lien vers sa page MeshCentral
 (`https://<hôte>/?gotonode=<id>&viewmode=11`) : la page Postes l’affiche en
