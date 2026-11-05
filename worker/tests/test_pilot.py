@@ -75,9 +75,9 @@ class CommandTests(unittest.TestCase):
     def test_links(self):
         self.assertEqual(
             pilot.device_link("wss://meshcentral.pointe-noire.com", "node//Ab$c@d"),
-            "https://meshcentral.pointe-noire.com/?gotonode=Ab$c@d&viewmode=10",
+            "https://meshcentral.pointe-noire.com/?gotonode=Ab$c@d&viewmode=11",
         )
-        self.assertEqual(pilot.device_link("wss://mesh.local:4430", "node/dom/x1"), "https://mesh.local:4430/dom/?gotonode=x1&viewmode=10")
+        self.assertEqual(pilot.device_link("wss://mesh.local:4430", "node/dom/x1"), "https://mesh.local:4430/dom/?gotonode=x1&viewmode=11")
         self.assertIsNone(pilot.device_link(None, "node//x"))
         self.assertIsNone(pilot.device_link("wss://m", "node//x\"><script>"))
         self.assertEqual(pilot.mesh_target("wss://meshcentral.pointe-noire.com"), ("meshcentral.pointe-noire.com", 443))

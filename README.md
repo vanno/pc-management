@@ -305,8 +305,8 @@ compressé (gzip puis base64) comme les autres scripts.
   joint MeshCentral.
 
 Le battement envoie aussi, pour chaque poste, le lien vers sa page MeshCentral
-(`https://<hôte>/?gotonode=<id>&viewmode=10`) : la page Postes l'affiche en
-« Ouvrir dans MeshCentral » (bureau à distance, fichiers, terminal).
+(`https://<hôte>/?gotonode=<id>&viewmode=11`) : la page Postes l’affiche en
+« Prendre la main » : il ouvre directement l’onglet Bureau.
 
 ## Supervision (sonde par poste)
 

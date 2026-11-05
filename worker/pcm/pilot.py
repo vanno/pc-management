@@ -130,14 +130,14 @@ def mesh_target(url: str | None) -> tuple[str, int]:
 
 
 def device_link(url: str | None, device_id: str) -> str | None:
-    """La page du poste dans MeshCentral : `https://hôte/?gotonode=<id>&viewmode=10`."""
+    """Le bureau à distance du poste dans MeshCentral (onglet Bureau) : `https://hôte/?gotonode=<id>&viewmode=11`."""
     u = urlparse(url or "")
     parts = device_id.split("/")
     if not u.hostname or len(parts) != 3 or parts[0] != "node" or not re.fullmatch(r"[A-Za-z0-9@$_-]+", parts[2]):
         return None
     domain = f"/{parts[1]}" if parts[1] else ""
     port = f":{u.port}" if u.port and u.port != 443 else ""
-    return f"https://{u.hostname}{port}{domain}/?gotonode={parts[2]}&viewmode=10"
+    return f"https://{u.hostname}{port}{domain}/?gotonode={parts[2]}&viewmode=11"
 
 
 def build_command(params: dict, nonce: str, script: str | None = None) -> str:

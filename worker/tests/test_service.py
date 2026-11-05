@@ -364,7 +364,7 @@ class ServiceTests(unittest.TestCase):
         avd = FakeAvd()
         with mock.patch.dict(os.environ, {"MESHCTRL_URL": "wss://meshcentral.pointe-noire.com"}):
             self.service(FakeMesh([PN01]), avd).tick()
-        self.assertEqual(avd.heartbeats[0]["devices"][0]["link"], "https://meshcentral.pointe-noire.com/?gotonode=pn01&viewmode=10")
+        self.assertEqual(avd.heartbeats[0]["devices"][0]["link"], "https://meshcentral.pointe-noire.com/?gotonode=pn01&viewmode=11")
 
     def test_wake_runs_on_offline_device_only(self):
         mesh = FakeMesh([PN01, PN02])
