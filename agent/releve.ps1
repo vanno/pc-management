@@ -130,6 +130,8 @@ function Split-Texte($G, [string]$T, $F, [float]$Max, [int]$Lignes = 3) {
         $n = $i + 1
         while ($n -lt $mots.Count -and $G.MeasureString(($mots[$i..$n] -join ' '), $F).Width -le $Max) { $n++ }
         if ($n -eq $mots.Count - 1 -and $n - $i -gt 2) { $n-- }
+        # Ni « · » ni « « » seuls en bout de ligne : ils descendent avec la suite.
+        while ($n - $i -gt 1 -and $n -lt $mots.Count -and $mots[$n - 1] -match '^[·«]$') { $n-- }
         Get-Ajuste $G ($mots[$i..($n - 1)] -join ' ') $F $Max
         $i = $n
     }
@@ -194,21 +196,22 @@ function Get-Releve($s) {
 
     # Réseau : le câble, l'adresse, le profil (NDI), la passerelle, internet, RTMP.
     $cartes = @($s.cartes)
+    # La passerelle de la première carte qui en a une : relevée à part, avec son ping.
+    $gw = @($cartes | Where-Object { $_.passerelle } | Select-Object -First 1)
     if (-not $cartes.Count) { Add-Ligne 'Réseau' 'Aucune carte réseau connectée' 'alerte' 'Aucune carte réseau connectée' }
     foreach ($c in $cartes) {
         $type = $(if ($c.filaire) { 'câble' } else { 'Wi-Fi' })
         Add-Ligne 'Réseau' "$(if ($c.nom -ne $type) { "$($c.nom) · " })$type · $($c.vitesse)"
         if (-not $c.ip) { Add-Ligne 'Réseau' 'Pas d''adresse IP' 'alerte' "$($c.nom) : pas d'adresse IP" }
-        else { Add-Ligne 'Réseau' "$($c.ip)$(if ($c.passerelle) { " · passerelle $($c.passerelle)" })" }
+        else { Add-Ligne 'Réseau' "IP $($c.ip)$(if ($c.passerelle -and -not ($gw.Count -and $c.passerelle -eq $gw[0].passerelle)) { " · passerelle $($c.passerelle)" })" }
         if ($c.profil -eq 'Public') { Add-Ligne 'Réseau' 'Profil Public : NDI souvent bloqué' 'attention' "$($c.nom) en profil Public : NDI risque de ne pas voir les autres postes" }
         elseif ($c.profil) { Add-Ligne 'Réseau' "Profil $($c.profil)" 'ok' }
         if ($c.filaire -and [string]$c.vitesse -match '^(\d+) Mbps$' -and [int]$Matches[1] -lt 1000) { $r.alertes.Add((New-Ligne "$($c.nom) à $($c.vitesse) : câble ou port à vérifier" 'attention')) }
     }
     if ($cartes.Count -and -not @($cartes | Where-Object { $_.filaire }).Count) { $r.alertes.Add((New-Ligne 'Wi-Fi seulement : un câble est plus sûr pour le direct' 'attention')) }
-    $gw = @($cartes | Where-Object { $_.passerelle } | Select-Object -First 1)
     if ($gw.Count) {
         $ms = Get-Ping $gw[0].passerelle
-        if ($null -ne $ms) { Add-Ligne 'Réseau' "Passerelle : répond en $ms ms" 'ok' } else { Add-Ligne 'Réseau' 'Passerelle : ne répond pas au ping' 'attention' 'La passerelle ne répond pas au ping' }
+        if ($null -ne $ms) { Add-Ligne 'Réseau' "Passerelle $($gw[0].passerelle) : $ms ms" 'ok' } else { Add-Ligne 'Réseau' "Passerelle $($gw[0].passerelle) : pas de réponse" 'attention' "La passerelle $($gw[0].passerelle) ne répond pas au ping" }
     }
     if ($cartes.Count) {
         $ip = Get-Adresse 'www.google.com'
