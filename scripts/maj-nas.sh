@@ -30,6 +30,13 @@ if [ "${1:-}" = "--si-demande" ]; then
 else
   origine="planifiée"
 fi
+# Sans accès à Docker (lancé en admin au lieu de root), rien n'est tenté et la
+# demande reste là pour le passage suivant.
+if ! docker info >/dev/null 2>&1; then
+  note "mise à jour $origine : échec, Docker inaccessible : lancer le script en root (sudo)"
+  echo "Docker inaccessible : relancez en root, par exemple : sudo sh $0 ${1:-}" >&2
+  exit 1
+fi
 # La demande est prise : elle ne repart pas au passage suivant, même en échec
 # (le journal, affiché sur la page Postes, dit pourquoi).
 rm -f "$DEMANDE"
