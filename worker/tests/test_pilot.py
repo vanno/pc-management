@@ -465,6 +465,25 @@ class AgentScriptTests(unittest.TestCase):
         # Un échec garde à l'écran la phrase qui dit pourquoi, pas seulement la première.
         self.assertIn("pas retirées|[Rr]efusé|échec|erreur", pilote.split("function Update-Fond", 1)[1])
 
+    def test_survey_reads_protections_in_windows(self):
+        """Essai sous Windows du 2026-11-05 : la page d'un poste en mode normal
+        affichait quatre « Mode événement partiel », et deux protections
+        passaient au vert sans rien relire."""
+        releve = pilot.SURVEY_SCRIPT.read_text(encoding="utf-8")
+        pilote = pilot.AGENT_SCRIPT.read_text(encoding="utf-8")
+        # Mode normal : rien de coupé n'est pas un défaut.
+        self.assertIn("if (-not $actives.Count) { Add-Ligne 'Protections' 'Mode événement inactif", releve)
+        # Les conseils relus sont ceux que le pilote coupe.
+        pattern = r"\$valeursConseils = (@\([^)]*\))"
+        self.assertEqual(re.search(pattern, releve).group(1), re.search(pattern, pilote).group(1))
+        # La veille relue sur les trois réglages que le pilote met à 0.
+        for reglage in ("STANDBYIDLE", "HIBERNATEIDLE", "VIDEOIDLE"):
+            self.assertIn(reglage, pilote)
+            self.assertIn(reglage, releve.split("function Get-Protection", 1)[1])
+        # Win32_PowerPlan ne répond pas sans droit d'administrateur.
+        self.assertNotIn("Win32_PowerPlan -", releve)
+        self.assertIn("powercfg.exe /getactivescheme", releve)
+
     def test_cleanup_names_what_windows_refuses(self):
         """« Tentative d'exécution d'une opération non autorisée » sans plus :
         chaque écriture du nettoyage est gardée, et son refus nommé."""

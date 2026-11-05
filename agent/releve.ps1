@@ -15,10 +15,10 @@
 #>
 
 # Ce que le relevé cherche sur le poste : nom affiché, nom dans « Applications
-# installées », processus quand on sait les reconnaître (sinon le dossier
-# d'installation suffit à dire « lancé »).
+# installées », et le nom exact du processus quand on sait dire « lancé ».
+# « vMix » seul : vMix Social et vMix Video Codec sont d'autres produits.
 $logiciels = @(
-    @('vMix', '^vMix', 'vMix64|vMix'),
+    @('vMix', '^vMix( \d[\d.]*)?$', 'vMix64|vMix'),
     @('OBS Studio', '^OBS Studio', 'obs64|obs32'),
     @('Companion', '^(Bitfocus )?Companion', 'Companion'),
     @('ATEM Software Control', 'ATEM (Switchers|Software)', 'ATEM Software Control'),
@@ -27,6 +27,15 @@ $logiciels = @(
     @('Pilote Blackmagic', 'Blackmagic Desktop Video|^Desktop Video', '')
 )
 $pasCoupe = [ordered]@{ windows_update = 'Windows Update pas en pause'; veille = 'Veille pas coupée'; notifications = 'Notifications pas coupées'; conseils = 'Conseils Windows pas coupés' }
+$nomsParties = @{ windows_update = 'Windows Update'; veille = 'veille'; notifications = 'notifications'; conseils = 'conseils Windows' }
+# Les mêmes valeurs que pilote.ps1 met à 0 pour couper les conseils.
+$valeursConseils = @('SubscribedContent-338389Enabled', 'SubscribedContent-310093Enabled', 'SubscribedContent-338388Enabled', 'SoftLandingEnabled', 'SystemPaneSuggestionsEnabled')
+# Les modes d'alimentation de Windows, par leur GUID : le nom affiché par
+# powercfg dépend de la langue et de l'encodage de la console.
+$plansAlim = @{ 'a1841308-3541-4fab-bc81-f71556f20b4a' = 'Économie d''énergie'; '381b4222-f694-41f0-9685-ff5bb260df2e' = 'Utilisation normale'; '8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c' = 'Performances élevées'; 'e9a42b02-d5df-448d-aa00-03f14749eb61' = 'Performances optimales' }
+# Windows 11, Paramètres > Alimentation > Mode d'alimentation : « Meilleure
+# efficacité énergétique » bride le processeur par-dessus le mode choisi.
+$modeEconome = '961cc777-2547-4f9d-8174-7d86181b8a7a'
 
 # Les écrans (mode réel : définition et fréquence) et le son par défaut.
 $codeReleve = @"
@@ -109,6 +118,61 @@ function Get-Ping([string]$Hote) {
 
 function Get-Go([double]$Octets) { '{0:N0} Go' -f ($Octets / 1GB) }
 
+# Une ligne trop longue pour sa colonne passe sur deux, coupée entre deux mots ;
+# au-delà, « … ».
+function Split-Texte($G, [string]$T, $F, [float]$Max) {
+    if ($G.MeasureString($T, $F).Width -le $Max) { return @($T) }
+    $mots = @($T -split ' ')
+    $n = 1
+    while ($n -lt $mots.Count -and $G.MeasureString(($mots[0..$n] -join ' '), $F).Width -le $Max) { $n++ }
+    if ($n -ge $mots.Count) { return @(Get-Ajuste $G $T $F $Max) }
+    @((Get-Ajuste $G ($mots[0..($n - 1)] -join ' ') $F $Max), (Get-Ajuste $G ($mots[$n..($mots.Count - 1)] -join ' ') $F $Max))
+}
+
+# Relit dans Windows ce qu'une partie du mode événement a coupé, sans se fier
+# à ce que le pilote a noté : la pause de Windows Update, la veille et
+# l'extinction de l'écran (sur batterie aussi quand il y en a une), les
+# notifications et les conseils de cette session.
+function Get-Protection([string]$Partie, $s, [bool]$Batterie, [bool]$SurBatterie) {
+    switch ($Partie) {
+        'windows_update' {
+            $fin = $null
+            try { if ($s.wu) { $fin = [datetime]$s.wu } } catch { }
+            if ($fin -and $fin -gt (Get-Date)) { return New-Ligne "Windows Update en pause jusqu'au $($fin.ToString('dd/MM HH:mm'))" 'ok' }
+            return New-Ligne 'Windows Update n''est plus en pause' 'alerte'
+        }
+        'veille' {
+            $reste = New-Object System.Collections.Generic.List[string]
+            $niveau = 'ok'
+            foreach ($x in @(@('SUB_SLEEP', 'STANDBYIDLE', 'veille'), @('SUB_SLEEP', 'HIBERNATEIDLE', 'veille prolongée'), @('SUB_VIDEO', 'VIDEOIDLE', 'écran éteint'))) {
+                $hex = @([regex]::Matches(((& powercfg.exe /q SCHEME_CURRENT $x[0] $x[1]) -join ' '), '0x[0-9a-fA-F]{8}') | ForEach-Object { $_.Value })
+                if ($hex.Count -lt 2) { continue }
+                $ac = [Convert]::ToInt64($hex[-2], 16); $dc = [Convert]::ToInt64($hex[-1], 16)
+                if ($ac -gt 0) { $reste.Add("$($x[2]) après $([Math]::Ceiling($ac / 60)) min"); $niveau = 'alerte' }
+                elseif ($Batterie -and $dc -gt 0) {
+                    $reste.Add("$($x[2]) après $([Math]::Ceiling($dc / 60)) min sur batterie")
+                    if ($SurBatterie) { $niveau = 'alerte' } elseif ($niveau -eq 'ok') { $niveau = 'attention' }
+                }
+            }
+            if (-not $reste.Count) { return New-Ligne 'Veille et extinction de l''écran coupées' 'ok' }
+            return New-Ligne "Encore programmé : $($reste -join ', ')" $niveau
+        }
+        'notifications' {
+            $a = Get-Valeur 'HKCU:\Software\Microsoft\Windows\CurrentVersion\PushNotifications' 'ToastEnabled'
+            $b = Get-Valeur 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Notifications\Settings' 'NOC_GLOBAL_SETTING_TOASTS_ENABLED'
+            if ($a -eq 0 -and $b -eq 0) { return New-Ligne 'Notifications coupées dans cette session' 'ok' }
+            return New-Ligne 'Notifications encore actives dans cette session' 'alerte'
+        }
+        'conseils' {
+            $cdm = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager'
+            $actifs = @($valeursConseils | Where-Object { (Get-Valeur $cdm $_) -ne 0 })
+            if ((Get-Valeur 'HKCU:\Software\Microsoft\Windows\CurrentVersion\UserProfileEngagement' 'ScoobeSystemSettingEnabled') -ne 0) { $actifs += 'ScoobeSystemSettingEnabled' }
+            if (-not $actifs.Count) { return New-Ligne 'Conseils Windows coupés dans cette session' 'ok' }
+            return New-Ligne 'Conseils et écrans « Tirez le meilleur parti de Windows » encore actifs dans cette session' 'alerte'
+        }
+    }
+}
+
 # Section par section, chaque ligne avec son niveau (ok, neutre, attention,
 # alerte) ; ce qui demande d'agir remonte aussi dans « À vérifier ». Tout se
 # lit sans droit d'administrateur, en quelques secondes.
@@ -124,7 +188,8 @@ function Get-Releve($s) {
     $cartes = @($s.cartes)
     if (-not $cartes.Count) { Add-Ligne 'Réseau' 'Aucune carte réseau connectée' 'alerte' 'Aucune carte réseau connectée' }
     foreach ($c in $cartes) {
-        Add-Ligne 'Réseau' "$($c.nom) · $(if ($c.filaire) { 'câble' } else { 'Wi-Fi' }) · $($c.vitesse)"
+        $type = $(if ($c.filaire) { 'câble' } else { 'Wi-Fi' })
+        Add-Ligne 'Réseau' "$(if ($c.nom -ne $type) { "$($c.nom) · " })$type · $($c.vitesse)"
         if (-not $c.ip) { Add-Ligne 'Réseau' 'Pas d''adresse IP' 'alerte' "$($c.nom) : pas d'adresse IP" }
         else { Add-Ligne 'Réseau' "$($c.ip)$(if ($c.passerelle) { " · passerelle $($c.passerelle)" })" }
         if ($c.profil -eq 'Public') { Add-Ligne 'Réseau' 'Profil Public : NDI souvent bloqué' 'attention' "$($c.nom) en profil Public : NDI risque de ne pas voir les autres postes" }
@@ -150,12 +215,19 @@ function Get-Releve($s) {
 
     # Machine : secteur, mode d'alimentation, disques, mémoire, redémarrage attendu.
     $bat = @(Get-CimInstance Win32_Battery -ErrorAction SilentlyContinue)
+    $surBatterie = $bat.Count -and $bat[0].BatteryStatus -eq 1
     if (-not $bat.Count) { Add-Ligne 'Machine' 'Alimentation : secteur' 'ok' }
-    elseif ($bat[0].BatteryStatus -eq 1) { Add-Ligne 'Machine' "Sur batterie : $($bat[0].EstimatedChargeRemaining) %" 'alerte' "Sur batterie ($($bat[0].EstimatedChargeRemaining) %) : brancher le secteur" }
+    elseif ($surBatterie) { Add-Ligne 'Machine' "Sur batterie : $($bat[0].EstimatedChargeRemaining) %" 'alerte' "Sur batterie ($($bat[0].EstimatedChargeRemaining) %) : brancher le secteur" }
     else { Add-Ligne 'Machine' "Secteur · batterie $($bat[0].EstimatedChargeRemaining) %" 'ok' }
-    # Le nom du mode par WMI : la sortie de powercfg n'a pas le même encodage partout.
-    $plan = [string](@(Get-CimInstance -Namespace root\cimv2\power -ClassName Win32_PowerPlan -Filter 'IsActive=True' -ErrorAction SilentlyContinue)[0].ElementName)
-    if ($plan) { if ($plan -match 'conomi|saver') { Add-Ligne 'Machine' "Alimentation : $plan" 'attention' "Mode d'alimentation « $plan » : le poste se bride" } else { Add-Ligne 'Machine' "Alimentation : $plan" } }
+    # Win32_PowerPlan ne répond pas sans droit d'administrateur : powercfg, lu par GUID.
+    if (((& powercfg.exe /getactivescheme) -join ' ') -match '([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\s*\((.+)\)') {
+        $guid = $Matches[1].ToLower()
+        $plan = $(if ($plansAlim[$guid]) { $plansAlim[$guid] } else { $Matches[2].Trim() })
+        $overlay = [string](Get-Valeur 'HKLM:\SYSTEM\CurrentControlSet\Control\Power\User\PowerSchemes' $(if ($surBatterie) { 'ActiveOverlayDcPowerScheme' } else { 'ActiveOverlayAcPowerScheme' }))
+        if ($guid -eq 'a1841308-3541-4fab-bc81-f71556f20b4a') { Add-Ligne 'Machine' "Alimentation : $plan" 'attention' "Mode d'alimentation « $plan » : le poste se bride" }
+        elseif ($overlay -eq $modeEconome) { Add-Ligne 'Machine' "Alimentation : $plan · meilleure efficacité énergétique" 'attention' "Mode d'alimentation « Meilleure efficacité énergétique » : le poste se bride" }
+        else { Add-Ligne 'Machine' "Alimentation : $plan" }
+    }
     foreach ($d in @(Get-CimInstance Win32_LogicalDisk -Filter 'DriveType=3 OR DriveType=2' -ErrorAction SilentlyContinue | Where-Object { $_.Size -gt 0 })) {
         $pc = [int](100 * $d.FreeSpace / $d.Size)
         $n = $(if ($pc -lt 10) { 'alerte' } elseif ($pc -lt 20) { 'attention' } else { 'ok' })
@@ -170,7 +242,7 @@ function Get-Releve($s) {
     if ((Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired') -or (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending')) {
         Add-Ligne 'Machine' 'Windows attend un redémarrage' 'attention' 'Windows attend un redémarrage : à faire après le direct'
     }
-    foreach ($v in @(Get-CimInstance Win32_VideoController -ErrorAction SilentlyContinue | Select-Object -First 2)) { Add-Ligne 'Machine' "GPU : $($v.Name)" }
+    foreach ($v in @(Get-CimInstance Win32_VideoController -ErrorAction SilentlyContinue | ForEach-Object { [string]$_.Name } | Where-Object { $_ } | Select-Object -Unique -First 4)) { Add-Ligne 'Machine' "GPU : $v" }
 
     # Écrans et son : définition et fréquence réelles, appareils son par défaut.
     try {
@@ -179,7 +251,7 @@ function Get-Releve($s) {
         foreach ($e in [PointeNoire.Releve]::Ecrans()) {
             $i++; $v = $e -split '\|'
             $hz = [int]$v[2]
-            $t = "Écran $i$(if ($v[3] -eq '1') { ' (principal)' }) : $($v[0]) × $($v[1]) à $hz Hz"
+            $t = "Écran $i$(if ($v[3] -eq '1') { ' principal' }) : $($v[0]) × $($v[1]) · $hz Hz"
             if ($hz -gt 1 -and $hz -lt 50) { Add-Ligne 'Écrans et son' $t 'attention' "Écran $i à $hz Hz : l'image saccade, passer en 50 ou 60 Hz" } else { Add-Ligne 'Écrans et son' $t }
         }
         foreach ($f in @(@(0, 'Sortie son'), @(1, 'Entrée son'))) {
@@ -190,14 +262,21 @@ function Get-Releve($s) {
 
     # Logiciels du direct : installés, et lancés ou non.
     $installes = @(Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*', 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*', 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*' -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName })
-    $procs = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Select-Object Name, ExecutablePath)
+    # Par le nom exact du processus : un service du même dossier (vMixService)
+    # ne fait pas « lancé ».
+    $procs = @(Get-Process -ErrorAction SilentlyContinue | ForEach-Object { $_.ProcessName })
     foreach ($a in $logiciels) {
         $x = @($installes | Where-Object { $_.DisplayName -match $a[1] } | Select-Object -First 1)
         if (-not $x.Count) { continue }
-        $nom = "$($a[0]) $(([string]$x[0].DisplayVersion -split ' ')[0])".Trim()
+        $version = ([string]$x[0].DisplayVersion -split ' ')[0]
+        if (-not $version -and $a[2]) {
+            $exe = ([string]$x[0].DisplayIcon -replace '"', '' -replace ',-?\d+$', '').Trim()
+            if ($exe -notmatch '\.exe$' -and $x[0].InstallLocation) { $exe = Join-Path ([string]$x[0].InstallLocation) "$(($a[2] -split '\|')[0]).exe" }
+            try { if ($exe -and (Test-Path -LiteralPath $exe)) { $version = [string](Get-Item -LiteralPath $exe).VersionInfo.ProductVersion } } catch { }
+        }
+        $nom = "$($a[0]) $version".Trim()
         if (-not $a[2]) { Add-Ligne 'Logiciels du direct' "$nom : installé"; continue }
-        $dir = ([string]$x[0].InstallLocation).TrimEnd('\')
-        $lance = @($procs | Where-Object { $_.Name -match "^($($a[2]))\.exe$" -or ($dir.Length -gt 3 -and $_.ExecutablePath -and $_.ExecutablePath.StartsWith("$dir\", 'OrdinalIgnoreCase')) }).Count
+        $lance = @($procs | Where-Object { $_ -match "^($($a[2]))$" }).Count
         Add-Ligne 'Logiciels du direct' "$nom : $(if ($lance) { 'lancé' } else { 'pas lancé' })" $(if ($lance) { 'ok' } else { 'neutre' })
     }
     if (-not $r.sections.Contains('Logiciels du direct')) { Add-Ligne 'Logiciels du direct' 'Aucun logiciel du direct reconnu' }
@@ -218,21 +297,24 @@ function Get-Releve($s) {
     }
     Add-Ligne 'Services' "Suivi en direct : $(if ($s.sonde) { 'actif' } else { 'inactif' })" $(if ($s.sonde) { 'ok' } else { 'neutre' })
 
-    # Protections du mode événement, relues ici quand la session le permet.
-    foreach ($k in $pasCoupe.Keys) {
-        if ($s.actives -notcontains $k) { Add-Ligne 'Protections' $pasCoupe[$k] 'attention' "Mode événement partiel : $($pasCoupe[$k].ToLower())"; continue }
-        $t = $parties[$k]
-        if ($k -eq 'windows_update' -and $s.wu) { $t += " jusqu'au $(Get-Date2 $s.wu)" }
-        if ($k -eq 'notifications' -and (Get-Valeur 'HKCU:\Software\Microsoft\Windows\CurrentVersion\PushNotifications' 'ToastEnabled') -ne 0) {
-            Add-Ligne 'Protections' 'Notifications encore actives ici' 'alerte' 'Notifications encore actives dans cette session'; continue
+    # Protections du mode événement : en mode normal rien n'est coupé, et ce
+    # n'est pas un défaut. Sinon chaque partie est relue dans Windows.
+    $actives = @($s.actives)
+    if (-not $actives.Count) { Add-Ligne 'Protections' 'Mode événement inactif : rien de coupé' }
+    else {
+        $manque = @($pasCoupe.Keys | Where-Object { $actives -notcontains $_ })
+        if ($manque.Count) { $r.alertes.Add((New-Ligne "Mode événement partiel, pas coupé : $(($manque | ForEach-Object { $nomsParties[$_] }) -join ', ')" 'attention')) }
+        foreach ($k in $pasCoupe.Keys) {
+            if ($actives -notcontains $k) { Add-Ligne 'Protections' $pasCoupe[$k] 'attention'; continue }
+            $p = Get-Protection $k $s ([bool]$bat.Count) ([bool]$surBatterie)
+            Add-Ligne 'Protections' $p.t $p.n $(if ($p.n -ne 'ok') { $p.t })
         }
-        if ($k -eq 'veille') {
-            $hex = @([regex]::Matches(((& powercfg.exe /q SCHEME_CURRENT SUB_SLEEP STANDBYIDLE) -join ' '), '0x[0-9a-fA-F]{8}') | ForEach-Object { $_.Value })
-            if ($hex.Count -ge 2 -and [Convert]::ToInt64($hex[-2], 16) -gt 0) { Add-Ligne 'Protections' "Veille encore à $([int]([Convert]::ToInt64($hex[-2], 16) / 60)) min" 'alerte' 'La veille est encore programmée sur secteur'; continue }
-        }
-        Add-Ligne 'Protections' $t 'ok'
     }
     foreach ($a in @($s.historique | Select-Object -First 3)) { Add-Ligne 'Dernières actions' (Get-Action $a) $(if ($a.ok) { 'ok' } else { 'alerte' }) }
+    # Le plus grave d'abord : une alerte rouge ne se cache pas derrière les orange.
+    $tri = @($r.alertes | Where-Object { $_.n -eq 'alerte' }) + @($r.alertes | Where-Object { $_.n -ne 'alerte' })
+    $r.alertes.Clear()
+    foreach ($x in $tri) { $r.alertes.Add($x) }
     $r
 }
 
@@ -245,21 +327,26 @@ function Show-Evenement($g, [int]$l, [int]$h, $s, $r, [string]$Libelle) {
     $couleur = @{ ok = [Drawing.Color]::FromArgb(120, 205, 145); neutre = [Drawing.Color]::FromArgb(140, 140, 140); attention = [Drawing.Color]::FromArgb(245, 190, 80); alerte = [Drawing.Color]::FromArgb(245, 110, 95) }
     $clair = & $pinceau ([Drawing.Color]::FromArgb(232, 232, 232))
     $fond = & $pinceau ([Drawing.Color]::FromArgb(235, 22, 24, 28))
-    $pw = [float]([Math]::Min(1320 * $k, $l - 520 * $k)); $x0 = [float]($l - $pw - 48 * $k); $y = [float](48 * $k); $bas = [float]($h - 96 * $k)
+    # À droite, en laissant à gauche deux colonnes d'icônes du Bureau.
+    $pw = [float]([Math]::Min(1640 * $k, $l - 260 * $k)); $x0 = [float]($l - $pw - 48 * $k); $y = [float](48 * $k); $bas = [float]($h - 96 * $k)
     # Le bandeau : jaune comme dans AVDiagram.
     $g.FillRectangle((& $pinceau ([Drawing.Color]::FromArgb(245, 197, 24))), $x0, $y, $pw, [float](132 * $k))
     $encre = & $pinceau ([Drawing.Color]::FromArgb(20, 20, 20))
-    $g.DrawString($Libelle, (& $police 52 $true), $encre, [float]($x0 + 28 * $k), [float]($y + 10 * $k))
+    $grand = & $police 52 $true
+    $g.DrawString($Libelle, $grand, $encre, [float]($x0 + 28 * $k), [float]($y + 10 * $k))
+    # La référence à droite, coupée si elle risque de toucher le titre.
     $ref = & $police 40 $true
-    $g.DrawString($s.reference, $ref, $encre, [float]($x0 + $pw - 28 * $k - $g.MeasureString($s.reference, $ref).Width), [float]($y + 18 * $k))
+    $texteRef = Get-Ajuste $g ([string]$s.reference) $ref ($pw - 96 * $k - $g.MeasureString($Libelle, $grand).Width)
+    $g.DrawString($texteRef, $ref, $encre, [float]($x0 + $pw - 28 * $k - $g.MeasureString($texteRef, $ref).Width), [float]($y + 18 * $k))
     $sous = "$(if ($s.depuis) { "Depuis le $(Get-Date2 $s.depuis) · " })relevé à $((Get-Date).ToString('HH:mm')), toutes les 15 minutes"
     $g.DrawString($sous, (& $police 19 $false), $encre, [float]($x0 + 30 * $k), [float]($y + 88 * $k))
     $y += 132 * $k + 14 * $k
     # À vérifier : ce qui demande d'agir, sinon une ligne verte.
-    $lignes = @($r.alertes | Select-Object -First 6)
+    $lignes = @($r.alertes)
+    if ($lignes.Count -gt 6) { $lignes = @($lignes[0..4]) + @(New-Ligne "+ $($lignes.Count - 5) autres points sur la page « État du poste »" 'neutre') }
     if (-not $lignes.Count) { $lignes = @(New-Ligne 'Aucun point à vérifier dans ce relevé' 'ok') }
     $texte = & $police 20 $false
-    $haut = [float]((22 + 32 * $lignes.Count + 10) * $k)
+    $haut = [float]((34 + 32 * $lignes.Count + 14) * $k)
     $g.FillRectangle($fond, $x0, $y, $pw, $haut)
     $pire = $(if (@($lignes | Where-Object { $_.n -eq 'alerte' }).Count) { 'alerte' } elseif (@($lignes | Where-Object { $_.n -eq 'attention' }).Count) { 'attention' } else { 'ok' })
     $g.FillRectangle((& $pinceau $couleur[$pire]), $x0, $y, [float](8 * $k), $haut)
@@ -284,10 +371,11 @@ function Show-Evenement($g, [int]$l, [int]$h, $s, $r, [string]$Libelle) {
             $g.DrawString($nom.ToUpper(), $titre, $gris, $cx, [float]$cy)
             $cy += 28 * $k
             foreach ($ligne in $r.sections[$nom]) {
-                if ($cy -gt $bas - 34 * $k) { break }
+                $morceaux = @(Split-Texte $g $ligne.t $ecrit ($cw - 48 * $k))
+                if ($cy + 27 * $k * $morceaux.Count -gt $bas - 7 * $k) { break }
                 $g.FillEllipse((& $pinceau $couleur[$ligne.n]), $cx, [float]($cy + 8 * $k), [float](9 * $k), [float](9 * $k))
-                $g.DrawString((Get-Ajuste $g $ligne.t $ecrit ($cw - 48 * $k)), $ecrit, $(if ($ligne.n -in 'attention', 'alerte') { & $pinceau $couleur[$ligne.n] } else { $clair }), [float]($cx + 18 * $k), [float]$cy)
-                $cy += 27 * $k
+                $encreLigne = $(if ($ligne.n -in 'attention', 'alerte') { & $pinceau $couleur[$ligne.n] } else { $clair })
+                foreach ($m in $morceaux) { $g.DrawString($m, $ecrit, $encreLigne, [float]($cx + 18 * $k), [float]$cy); $cy += 27 * $k }
             }
             $cy += 18 * $k
         }
