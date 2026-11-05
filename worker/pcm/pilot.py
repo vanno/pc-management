@@ -241,8 +241,10 @@ def event_mode(
 CLEANUP_TIMEOUT = 600
 
 
-def cleanup(mesh: MeshCtrl, device_id: str, params: dict, new_nonce: Callable[[], str], script: str | None = None) -> tuple[bool, str]:
-    """Le profil de nettoyage. L'état d'avant reste sur le poste, qui sait l'annuler."""
+def cleanup(mesh: MeshCtrl, device_id: str, params: dict, new_nonce: Callable[[], str], script: str | None = None) -> tuple[bool, str] | tuple[bool, str, bool]:
+    """Le profil de nettoyage. L'état d'avant reste sur le poste, qui sait l'annuler.
+    Un troisième élément vrai : en échec, mais l'allègement est posé (Windows
+    refuse seulement la liste des applications), donc à relire quand même."""
     if not isinstance(params.get("actif"), bool):
         return False, "Paramètre `actif` manquant."
     body = {"op": "nettoyage", "actif": params["actif"], "applications": params.get("applications") is True}
@@ -252,6 +254,8 @@ def cleanup(mesh: MeshCtrl, device_id: str, params: dict, new_nonce: Callable[[]
     except (MeshError, PilotError) as exc:
         return False, str(exc)
     detail = reply.get("detail") or ""
+    if reply.get("partiel") is True and not reply.get("ok"):
+        return False, detail[:1].upper() + detail[1:], True
     return bool(reply.get("ok")), detail[:1].upper() + detail[1:]
 
 

@@ -30,6 +30,7 @@ class FakeMesh:
         self.event = False
         self.pilot_ops = []
         self.screen_to_pose = False
+        self.cleanup_without_app_list = False
         self.woken = []
         self.messages = []
         self.check_points = [{"nom": "Veille", "ok": True, "constat": "jamais"}]
@@ -75,6 +76,8 @@ class FakeMesh:
                 return pnpl_reply(nonce, op="diagnostic", ok=True, detail="Ethernet 192.168.1.20/24 ; ports : 4/4 joignables", diagnostic={"poste": "PN01", "cartes": []})
             if params["op"] == "evenement" and self.screen_to_pose:
                 return pnpl_reply(nonce, op="evenement", ok=True, detail="mode événement actif : écran « Mode événement »", fond_a_poser=True)
+            if params["op"] == "nettoyage" and self.cleanup_without_app_list:
+                return pnpl_reply(nonce, op="nettoyage", ok=False, partiel=True, detail="profil appliqué : Production, 6 service(s) et 3 tâche(s) coupés, 4 réglages posés, 0 application(s) retirée(s). Applications pas retirées : Windows refuse d'en donner la liste (Accès refusé)")
             if params["op"] == "fond":
                 return pnpl_reply(nonce, op="fond", ok=True, detail="fond d'état posé. Session de vannh : affiché sur 1 écran(s)", points=[])
             return pnpl_reply(nonce, op=params["op"], ok=True, detail="mode événement actif")
@@ -431,6 +434,19 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(result, "Mode événement actif. Pas appliqué dans Windows. Notifications : vannh : réglé, mais Windows affiche encore les notifications")
         self.assertEqual(avd.controles[0]["etat"], "pas_applique")
         self.assertIn("contrôle pas_applique", self.logs[-1])
+
+    def test_cleanup_without_the_app_list_fails_but_is_checked(self):
+        """Windows refuse la liste des applications : la tâche échoue, et le
+        contrôle dit quand même à AVDiagram que le poste est allégé."""
+        mesh = FakeMesh([PN01])
+        mesh.cleanup_without_app_list = True
+        avd = FakeAvd([{**task(action="nettoyage"), "params": {"actif": True, "applications": True}}])
+        self.service(mesh, avd).tick()
+        self.assertEqual([o["op"] for o in mesh.pilot_ops], ["nettoyage", "controle"])
+        (_, ok, result), = avd.finished
+        self.assertFalse(ok)
+        self.assertIn("Applications pas retirées : Windows refuse d'en donner la liste", result)
+        self.assertEqual(avd.controles[0]["etat"], "verifie")
 
     def test_cleanup_and_probe_are_checked_and_others_are_not(self):
         mesh = FakeMesh([PN01])

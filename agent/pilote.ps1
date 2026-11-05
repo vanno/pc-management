@@ -696,6 +696,8 @@ function Enable-Nettoyage([bool]$Applications) {
         Write-Utf8 $fichierNettoyage ($etat | ConvertTo-Json -Depth 6)
     }
     $result.ok = -not $sansListe
+    # Allégé, applications pas retirées : le contrôle relit quand même l'allègement.
+    if ($sansListe) { $result.partiel = $true }
     $result.applications = @($retirees | Sort-Object -Unique)
     $txt = "profil appliqué : $plan, $services service(s) et $taches tâche(s) coupés, $reglages réglages posés"
     if ($Applications) { $txt += ", $(@($result.applications).Count) application(s) retirée(s)" }

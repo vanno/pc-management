@@ -436,7 +436,9 @@ L'action « Nettoyer » de la page Postes applique un profil de production, et
 l'état de la première. Chaque écriture refusée par Windows est nommée dans le
 résultat (« Refusé par Windows : service …, réglage … ») et le reste
 s'applique. Si Windows refuse la liste des applications, la désinstallation
-passe en échec en le disant, le profil restant appliqué.
+passe en échec en le disant, le profil restant appliqué : le relais le
+signale (`partiel`), le contrôle relit quand même l'allègement, et AVDiagram
+montre le poste allégé avec la désinstallation en échec.
 
 | Partie | Effet | Annulation |
 |---|---|---|

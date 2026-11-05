@@ -250,10 +250,17 @@ class Service:
         self.log(f"tâche {task['id']} {task.get('action')} {task.get('asset_tag')} : {state} : {result}{suffix}")
 
     def _checked(self, device: Device, action: str, params: dict, done: tuple) -> tuple:
-        """Après une action faite, son effet relu dans Windows (pilot.check)."""
+        """Après une action faite, son effet relu dans Windows (pilot.check).
+        Une action en échec qui a quand même posé quelque chose (`done[2]` vrai,
+        le nettoyage sans la liste des applications) est relue aussi : elle
+        reste en échec, et AVDiagram sait que le poste a changé."""
         ok, text = done[0], done[1]
-        if not ok:
+        partial = len(done) > 2 and done[2] is True
+        if not ok and not partial:
             return done
+        if partial:
+            controle = pilot.check(self.mesh, device.id, pilot.CHECKED[action], params, inv.new_nonce, script=self.check_script)
+            return False, text, controle
         controle = pilot.check(self.mesh, device.id, pilot.CHECKED[action], params, inv.new_nonce, script=self.check_script)
         return pilot.with_check(ok, text, controle)
 
