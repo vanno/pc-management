@@ -121,8 +121,8 @@ function Get-Mesure($Avant, $Apres, [double]$Secondes) {
     $cartes = @()
     foreach ($nom in $Apres.Keys) {
         if (-not $Avant.ContainsKey($nom) -or $Secondes -le 0) { continue }
-        $rx = [Math]::Max(0, ($Apres[$nom].rx - $Avant[$nom].rx) * 8 / $Secondes)
-        $tx = [Math]::Max(0, ($Apres[$nom].tx - $Avant[$nom].tx) * 8 / $Secondes)
+        $rx = [Math]::Max(0.0, ($Apres[$nom].rx - $Avant[$nom].rx) * 8 / $Secondes)
+        $tx = [Math]::Max(0.0, ($Apres[$nom].tx - $Avant[$nom].tx) * 8 / $Secondes)
         $n = Get-Reseau $nom
         $err = [Math]::Max(0, $Apres[$nom].err - $Avant[$nom].err)
         $cartes += [ordered]@{ name = $nom; rx = [Math]::Round($rx); tx = [Math]::Round($tx); speed = $Apres[$nom].speed; ipv4 = $n.ipv4; prefix = $n.prefix; gateway = $n.gateway; dhcp = $n.dhcp; profile = $n.profile; wired = $Apres[$nom].wired; errors = [long]$err }
