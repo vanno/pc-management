@@ -13,6 +13,10 @@
   Retrait : chaque compte ouvert retrouve son fond d'origine ; un compte fermé
   le retrouve à sa prochaine ouverture de session, la tâche restant 7 jours
   en mode retrait avant de partir.
+
+  Le résultat dit ce qui s'est passé dans chaque session ouverte : fond.ps1 y
+  écrit son bilan (%LOCALAPPDATA%\PointeNoire\fond-resultat.json), relu ici
+  pendant 30 secondes au plus. Un échec dans une session rend la tâche en échec.
 #>
 
 $ErrorActionPreference = 'Stop'
@@ -24,6 +28,48 @@ $result = [ordered]@{ op = 'fond'; ok = $false; detail = '' }
 
 function Write-Texte([string]$Chemin, [string]$Texte, [bool]$Bom) {
     [IO.File]::WriteAllText($Chemin, $Texte, (New-Object System.Text.UTF8Encoding $Bom))
+}
+
+# Les comptes ouverts : le propriétaire de chaque explorer.exe, et le bilan que
+# fond.ps1 laisse dans son profil.
+function Get-Comptes {
+    $vus = @{}
+    foreach ($x in @(Get-CimInstance Win32_Process -Filter "Name='explorer.exe'" -ErrorAction SilentlyContinue)) {
+        $sid = (Invoke-CimMethod -InputObject $x -MethodName GetOwnerSid -ErrorAction SilentlyContinue).Sid
+        if (-not $sid -or $vus.ContainsKey($sid)) { continue }
+        $profil = (Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\$sid" -ErrorAction SilentlyContinue).ProfileImagePath
+        if (-not $profil) { continue }
+        $nom = [string](Invoke-CimMethod -InputObject $x -MethodName GetOwner -ErrorAction SilentlyContinue).User
+        $vus[$sid] = [pscustomobject]@{ nom = $(if ($nom) { $nom } else { Split-Path $profil -Leaf }); fichier = Join-Path $profil 'AppData\Local\PointeNoire\fond-resultat.json' }
+    }
+    @($vus.Values | Sort-Object nom)
+}
+
+# Lance la tâche dans les sessions ouvertes et attend leur bilan.
+function Invoke-Sessions([string]$SansCompte) {
+    $debut = (Get-Date).AddSeconds(-1)
+    Start-ScheduledTask -TaskName $tache -ErrorAction SilentlyContinue
+    $comptes = Get-Comptes
+    if (-not $comptes.Count) { return @{ echec = $false; texte = $SansCompte } }
+    $bilans = @{}
+    for ($i = 0; $i -lt 30 -and $bilans.Count -lt $comptes.Count; $i++) {
+        Start-Sleep -Seconds 1
+        foreach ($c in $comptes) {
+            if ($bilans.ContainsKey($c.nom)) { continue }
+            $f = Get-Item -LiteralPath $c.fichier -ErrorAction SilentlyContinue
+            if ($f -and $f.LastWriteTime -ge $debut) {
+                try { $bilans[$c.nom] = Get-Content -Raw -Encoding UTF8 -LiteralPath $c.fichier | ConvertFrom-Json } catch { }
+            }
+        }
+    }
+    $echec = $false
+    $lignes = foreach ($c in $comptes) {
+        $b = $bilans[$c.nom]
+        if (-not $b) { "Session de $($c.nom) : pas de réponse en 30 secondes, nouvel essai dans 15 minutes" }
+        elseif ($b.ok) { "Session de $($c.nom) : $($b.detail)" }
+        else { $echec = $true; "Session de $($c.nom) : échec, $(([string]$b.detail).Substring(0, [Math]::Min(200, ([string]$b.detail).Length)))" }
+    }
+    @{ echec = $echec; texte = ($lignes -join '. ') }
 }
 
 function Write-Etat($Valeurs) {
@@ -65,9 +111,10 @@ try {
         $l.IconLocation = "$env:SystemRoot\System32\imageres.dll,-1023"
         $l.Description = 'Ce que AVDiagram a appliqué sur ce poste'
         $l.Save()
-        Start-ScheduledTask -TaskName $tache
-        $result.ok = $true
-        $result.detail = 'fond d''état posé : comptes ouverts mis à jour dans la minute, icône « État du poste » sur le Bureau'
+        $sessions = Invoke-Sessions 'Aucun compte ouvert : il s''affichera à la prochaine ouverture de session'
+        $result.ok = -not $sessions.echec
+        $result.detail = "fond d'état posé, icône « État du poste » sur le Bureau. $($sessions.texte)"
+        if ($sessions.echec) { $result.detail = "fond d'état pas affiché. $($sessions.texte)" }
     } else {
         if (-not (Test-Path $fond)) { $result.ok = $true; $result.detail = 'pas de fond d''état sur ce poste' }
         else {
@@ -75,9 +122,9 @@ try {
         Remove-Item $icone -Force -ErrorAction SilentlyContinue
         # La tâche reste, en retrait : elle rend son fond à chaque compte qui
         # s'ouvre. pilote.ps1 la retire après 7 jours.
-        Start-ScheduledTask -TaskName $tache -ErrorAction SilentlyContinue
-        $result.ok = $true
-        $result.detail = 'fond d''état retiré : fond d''origine rendu aux comptes ouverts, aux autres à leur prochaine session'
+        $sessions = Invoke-Sessions 'Aucun compte ouvert.'
+        $result.ok = -not $sessions.echec
+        $result.detail = "fond d'état retiré, les comptes fermés retrouvent le leur à leur prochaine session. $($sessions.texte)"
         }
     }
 } catch {

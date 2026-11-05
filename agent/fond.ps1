@@ -14,17 +14,28 @@
 
   Le fond d'origine de chaque écran est gardé dans
   %LOCALAPPDATA%\PointeNoire\fond-avant.json et rendu quand le pilote retire
-  le fond (`retire` dans etat.json).
+  le fond (`retire` dans etat.json). Windows à la une reprendrait la main sur
+  le fond : il est coupé pendant le fond d'état, et rendu au retrait.
+
+  Chaque passage écrit son bilan dans %LOCALAPPDATA%\PointeNoire\fond-resultat.json
+  (le, ok, detail), que fond-pose.ps1 relit pour dire ce qui s'est vraiment
+  passé dans chaque session.
 
   -Detail : la page « État du poste » (icône du Bureau public), en local.
 #>
 param([switch]$Detail)
 
 $ErrorActionPreference = 'Stop'
+# Avant tout : Get-Ton s'en sert aussi pour la page « État du poste », et
+# powershell.exe ne charge pas System.Drawing de lui-même.
+Add-Type -AssemblyName System.Drawing
 $base = Join-Path $env:ProgramData 'PointeNoire'
 $etatFond = Join-Path $base 'fond\etat.json'
 $perso = Join-Path $env:LOCALAPPDATA 'PointeNoire'
 $avantFichier = Join-Path $perso 'fond-avant.json'
+$resultatFichier = Join-Path $perso 'fond-resultat.json'
+$cleFonds = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Wallpapers'
+$cleUne = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\DesktopSpotlight\Settings'
 $parties = [ordered]@{ windows_update = 'Windows Update en pause'; veille = 'Veille coupée'; notifications = 'Notifications coupées'; conseils = 'Conseils Windows coupés'; fond = 'Fond noir' }
 
 function Read-Json([string]$Chemin) {
@@ -54,6 +65,16 @@ function Get-Etat {
         nettoyage = $(if ($n) { $n.depuis } else { $null }); sonde = ($f -and $f.sonde); derniere = $(if ($f) { $f.derniere } else { $null })
         cartes = $cartes; mesh = $(if ($mesh) { [string]$mesh.Status } else { 'absent' }); retire = ($f -and $f.retire)
     }
+}
+
+function Get-Valeur([string]$Cle, [string]$Nom) {
+    try { (Get-ItemProperty -Path $Cle -Name $Nom -ErrorAction Stop).$Nom } catch { $null }
+}
+
+function Write-Resultat([bool]$Ok, [string]$Texte) {
+    if (-not (Test-Path $perso)) { New-Item -ItemType Directory -Path $perso -Force | Out-Null }
+    $r = [ordered]@{ le = (Get-Date).ToString('o'); ok = $Ok; detail = $Texte }
+    [IO.File]::WriteAllText($resultatFichier, ($r | ConvertTo-Json), (New-Object System.Text.UTF8Encoding $false))
 }
 
 function Get-Date2($Texte) {
@@ -116,7 +137,7 @@ if ($Detail) {
 
 # --- Le fond, écran par écran --------------------------------------------------
 
-Add-Type -AssemblyName System.Drawing
+try {
 Add-Type -TypeDefinition @'
 using System;
 using System.Runtime.InteropServices;
@@ -150,11 +171,13 @@ for ($i = 0; $i -lt $dw.GetMonitorDevicePathCount(); $i++) {
     try { $r = $dw.GetMonitorRECT($id) } catch { continue }
     $ecrans += [pscustomobject]@{ id = $id; l = $r.Right - $r.Left; h = $r.Bottom - $r.Top; principal = ($r.Left -eq 0 -and $r.Top -eq 0) }
 }
-if (-not $ecrans.Count) { return }
 if (-not (Test-Path $perso)) { New-Item -ItemType Directory -Path $perso -Force | Out-Null }
 $s = Get-Etat
+$bilan = $null
 
-if ($s.retire) {
+if (-not $ecrans.Count) {
+    $bilan = 'aucun écran actif dans cette session, rien à changer'
+} elseif ($s.retire) {
     $avant = Read-Json $avantFichier
     if ($avant) {
         foreach ($e in $ecrans) {
@@ -163,17 +186,45 @@ if ($s.retire) {
             if ($f -and (Test-Path $f)) { $dw.SetWallpaper($e.id, $f) }
         }
         $dw.SetPosition([int]$avant.position)
+        # Windows à la une, s'il était là avant le fond d'état.
+        if ($null -ne $avant.une -and (Test-Path $cleUne)) { Set-ItemProperty -Path $cleUne -Name EnabledState -Value ([int]$avant.une) -Type DWord }
+        if ($null -ne $avant.type) { Set-ItemProperty -Path $cleFonds -Name BackgroundType -Value ([int]$avant.type) -Type DWord }
         Remove-Item $avantFichier -Force
-    }
+        $bilan = 'fond d''origine rendu'
+    } else { $bilan = 'pas de fond d''état dans cette session' }
     Get-ChildItem $perso -Filter 'fond-*.png' -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
-    return
-}
+} else {
 
-# Le fond d'origine, une seule fois : c'est lui que le retrait rend.
+# Le fond d'origine, une seule fois : c'est lui que le retrait rend, avec le
+# type de fond (image, diaporama, Windows à la une).
+$type0 = Get-Valeur $cleFonds 'BackgroundType'
+$une0 = Get-Valeur $cleUne 'EnabledState'
+$ecrase = 0
 if (-not (Test-Path $avantFichier)) {
     $garde = @($ecrans | ForEach-Object { [ordered]@{ id = $_.id; fond = $dw.GetWallpaper($_.id) } })
     $defaut = (Get-ItemProperty 'HKCU:\Control Panel\Desktop' -Name WallPaper -ErrorAction SilentlyContinue).WallPaper
-    [IO.File]::WriteAllText($avantFichier, ([ordered]@{ ecrans = $garde; defaut = $defaut; position = $dw.GetPosition() } | ConvertTo-Json -Depth 4), (New-Object System.Text.UTF8Encoding $false))
+    $avant = [ordered]@{ ecrans = $garde; defaut = $defaut; position = $dw.GetPosition(); type = $type0; une = $une0 }
+    [IO.File]::WriteAllText($avantFichier, ($avant | ConvertTo-Json -Depth 4), (New-Object System.Text.UTF8Encoding $false))
+} else {
+    # Gardé par une version sans le type de fond : on le complète avant d'y toucher.
+    $avant = Read-Json $avantFichier
+    if ($avant -and $avant.PSObject.Properties.Name -notcontains 'type') {
+        $avant | Add-Member -NotePropertyName type -NotePropertyValue $type0
+        $avant | Add-Member -NotePropertyName une -NotePropertyValue $une0
+        [IO.File]::WriteAllText($avantFichier, ($avant | ConvertTo-Json -Depth 4), (New-Object System.Text.UTF8Encoding $false))
+    }
+    # Déjà affiché une fois : un écran qui n'a plus notre image, Windows l'a remplacée.
+    if (Get-ChildItem $perso -Filter 'fond-*.png' -ErrorAction SilentlyContinue) {
+        $ecrase = @($ecrans | Where-Object { [IO.Path]::GetFileName([string]$dw.GetWallpaper($_.id)) -notlike 'fond-*.png' }).Count
+    }
+}
+
+# Windows à la une remet sinon sa photo par-dessus : coupé le temps du fond d'état.
+$aLaUne = ($type0 -eq 3) -or ($une0 -eq 1)
+if ($aLaUne) {
+    if ($une0 -eq 1) { Set-ItemProperty -Path $cleUne -Name EnabledState -Value 0 -Type DWord }
+    if (-not (Test-Path $cleFonds)) { New-Item -Path $cleFonds -Force | Out-Null }
+    Set-ItemProperty -Path $cleFonds -Name BackgroundType -Value 0 -Type DWord
 }
 
 $noir = $s.actives -contains 'fond'
@@ -222,3 +273,15 @@ foreach ($e in $ecrans) {
 # 4 : remplir l'écran (DWPOS_FILL).
 $dw.SetPosition(4)
 Get-ChildItem $perso -Filter 'fond-*.png' | Where-Object { $images -notcontains $_.FullName } | Remove-Item -Force -ErrorAction SilentlyContinue
+# La preuve : ce que Windows affiche vraiment, relu écran par écran.
+$noms = @($images | ForEach-Object { [IO.Path]::GetFileName($_) })
+$refuses = @($ecrans | Where-Object { $noms -notcontains [IO.Path]::GetFileName([string]$dw.GetWallpaper($_.id)) }).Count
+if ($refuses) { throw "Windows n'a pas pris le fond sur $refuses écran(s) sur $($ecrans.Count)" }
+$bilan = "affiché sur $($ecrans.Count) écran(s)"
+if ($aLaUne) { $bilan += ', Windows à la une coupé jusqu''au retrait' }
+if ($ecrase) { $bilan += ", remis sur $ecrase écran(s) où Windows l'avait remplacé" }
+}
+Write-Resultat $true $bilan
+} catch {
+    Write-Resultat $false "$($_.Exception.Message) (fond.ps1, ligne $($_.InvocationInfo.ScriptLineNumber))"
+}

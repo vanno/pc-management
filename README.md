@@ -280,7 +280,12 @@ compressé (gzip puis base64) comme les autres scripts.
   du Bureau public ouvre le détail en local. Le fond d'origine de chaque compte
   est gardé dans `%LOCALAPPDATA%\PointeNoire\fond-avant.json` et rendu au
   retrait ; un compte fermé le retrouve à sa prochaine session, la tâche part
-  7 jours après.
+  7 jours après. Windows à la une remettrait sa photo par-dessus : il est
+  coupé pendant le fond d'état (`BackgroundType` et `DesktopSpotlight`) et
+  rendu au retrait. Chaque passage relit le fond que Windows affiche et écrit
+  son bilan dans `%LOCALAPPDATA%\PointeNoire\fond-resultat.json` ;
+  `fond-pose.ps1` attend ce bilan 30 secondes dans chaque session ouverte, et
+  la tâche AVDiagram passe en échec si une session n'a pas pris le fond.
 - Mur d'écrans (`agent/vignette.ps1`, posé par `agent/vignette-pose.ps1`) :
   AVDiagram tire un jeton `pnv_` par poste, qui ne permet que de poser l'image
   de son écran. Une tâche PointeNoire-Vignette (groupe Utilisateurs, chaque
