@@ -3,8 +3,12 @@
   MeshCentral (compte SYSTEM), à part de pilote.ps1 pour rester sous la
   longueur de commande de l'agent. Compatible Windows PowerShell 5.1.
 
-  PNPL_PARAMS : { op: fond, actif, reference, script } (script : fond.ps1,
-  gzip puis base64). Sortie : PNPL1:<jeton>:<JSON en base64>, comme pilote.ps1.
+  PNPL_PARAMS : { op: fond, actif, reference }. fond.ps1 arrive dans
+  $FondSource, que le worker place en tête de ce script : les deux voyagent
+  compressés ensemble. Avant lui, { op: releve } pose de la même façon
+  agent/releve.ps1, le relevé de l'écran du mode événement : à deux dans une
+  commande, ils dépasseraient sa longueur. Sortie : PNPL1:<jeton>:<JSON en
+  base64>, comme pilote.ps1.
 
   Pose : C:\ProgramData\PointeNoire\fond (lecture seule pour les comptes),
   la tâche PointeNoire-Fond (groupe Utilisateurs : ouverture de session,
@@ -85,11 +89,16 @@ try {
     $p = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($env:PNPL_PARAMS)) | ConvertFrom-Json
     $lanceur = Join-Path $dossier 'lanceur.vbs'
     $fond = Join-Path $dossier 'fond.ps1'
-    if ($p.actif) {
+    if ($p.op -eq 'releve') {
+        if (-not $FondSource) { throw 'releve.ps1 absent de la commande' }
+        if (-not (Test-Path $dossier)) { New-Item -ItemType Directory -Path $dossier -Force | Out-Null }
+        & icacls.exe $dossier /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' '*S-1-5-32-545:(OI)(CI)RX' | Out-Null
+        Write-Texte (Join-Path $dossier 'releve.ps1') $FondSource $true
+        $result.op = 'releve'; $result.ok = $true; $result.detail = 'relevé de l''écran posé'
+    } elseif ($p.actif) {
         if ([string]$p.reference -notmatch '^[\w .-]{1,60}$') { throw 'référence du poste illisible' }
-        $m = New-Object IO.MemoryStream(, [Convert]::FromBase64String($p.script))
-        $g = New-Object IO.Compression.GZipStream($m, [IO.Compression.CompressionMode]::Decompress)
-        $script = (New-Object IO.StreamReader($g, [Text.Encoding]::UTF8)).ReadToEnd()
+        if (-not $FondSource) { throw 'fond.ps1 absent de la commande' }
+        $script = $FondSource
         if (-not (Test-Path $dossier)) { New-Item -ItemType Directory -Path $dossier -Force | Out-Null }
         # Les comptes lisent et lancent, seuls SYSTEM et les administrateurs écrivent.
         & icacls.exe $dossier /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' '*S-1-5-32-545:(OI)(CI)RX' | Out-Null

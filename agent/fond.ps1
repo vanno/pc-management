@@ -11,8 +11,13 @@
   actions (réussie ou en échec). Couleur : gris normal, orange mode
   événement partiel, rouge complet.
   Autres écrans : noir uni, rien ne part vers un projecteur ou un mur LED.
-  Partie « fond » du mode événement : « MODE ÉVÉNEMENT » en grand, depuis
-  quand, ce qui est coupé et les dernières actions, sans le détail réseau.
+  Partie « fond » du mode événement : l'écran d'un technicien du direct. Un
+  bandeau jaune « MODE ÉVÉNEMENT » (depuis quand, heure du relevé), ce qui est
+  à vérifier, puis trois colonnes toujours à la même place : réseau (câble,
+  adresse, profil pour NDI, passerelle, internet, port RTMP), écrans et son
+  (définition et fréquence réelles, appareils par défaut), machine (secteur,
+  disques, mémoire, redémarrage attendu), services, logiciels du direct lancés
+  ou non, protections du mode relues dans la session, dernières actions.
 
   Le fond d'origine de chaque écran est gardé dans
   %LOCALAPPDATA%\PointeNoire\fond-avant.json et rendu quand le pilote retire
@@ -34,6 +39,9 @@ $resultatFichier = Join-Path $perso 'fond-resultat.json'
 $cleFonds = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Wallpapers'
 $cleUne = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\DesktopSpotlight\Settings'
 $parties = [ordered]@{ windows_update = 'Windows Update en pause'; veille = 'Veille coupée'; notifications = 'Notifications coupées'; conseils = 'Conseils Windows coupés'; fond = 'Écran « Mode événement »' }
+# Le relevé du mode événement (agent/releve.ps1), posé à côté par fond-pose.ps1.
+$fichierReleve = Join-Path $PSScriptRoot 'releve.ps1'
+if (Test-Path $fichierReleve) { . $fichierReleve }
 
 function Read-Json([string]$Chemin) {
     if (-not (Test-Path $Chemin)) { return $null }
@@ -111,20 +119,6 @@ function Get-Action($a) {
     "$(if ($a.ok) { 'Réussi' } else { 'Échec' }) $quand · $($a.texte)"
 }
 
-# En mode événement : depuis quand, ce qui est coupé, les trois dernières actions.
-function Get-LignesEvenement($s) {
-    $l = New-Object System.Collections.Generic.List[string]
-    if ($s.depuis) { $l.Add("Depuis le $(Get-Date2 $s.depuis)") }
-    foreach ($k in $parties.Keys) {
-        if ($k -eq 'fond' -or $s.actives -notcontains $k) { continue }
-        $t = $parties[$k]
-        if ($k -eq 'windows_update' -and $s.wu) { $t += " jusqu'au $(Get-Date2 $s.wu)" }
-        $l.Add("■ $t")
-    }
-    foreach ($a in @($s.historique | Select-Object -First 3)) { $l.Add((Get-Action $a)) }
-    $l
-}
-
 # Coupe un texte trop long pour sa place, avec « … ».
 function Get-Ajuste($G, [string]$T, $F, [float]$Max) {
     if ($G.MeasureString($T, $F).Width -le $Max) { return $T }
@@ -147,12 +141,16 @@ if ($Detail) {
     $h = { param($t) [Net.WebUtility]::HtmlEncode([string]$t) }
     $c = $ton[1]
     $lignes = (Get-Lignes $s | ForEach-Object { "<li>$(& $h $_)</li>" }) -join ''
+    $rel = $(if (Get-Command Get-Releve -ErrorAction SilentlyContinue) { Get-Releve $s } else { [pscustomobject]@{ alertes = @(); sections = [ordered]@{} } })
+    $li = { param($x) "<li class=""$($x.n)"">$(& $h $x.t)</li>" }
+    $alertes = $(if ($rel.alertes.Count) { ($rel.alertes | ForEach-Object { & $li $_ }) -join '' } else { '<li class="ok">Aucun point à vérifier</li>' })
+    $releve = "<h2>À vérifier</h2><ul>$alertes</ul>" + (($rel.sections.Keys | ForEach-Object { "<h2>$(& $h $_)</h2><ul>$(($rel.sections[$_] | ForEach-Object { & $li $_ }) -join '')</ul>" }) -join '')
     $cartes = ($s.cartes | ForEach-Object { "<tr><td>$(& $h $_.nom)</td><td>$(& $h $_.ip)</td><td>$(& $h $_.passerelle)</td><td>$(& $h $_.profil)</td><td>$(& $h $_.vitesse)</td><td>$(if ($_.filaire) { 'filaire' } else { 'sans fil' })</td></tr>" }) -join ''
     $html = @"
 <!doctype html><html lang="fr"><meta charset="utf-8"><title>État du poste $(& $h $s.reference)</title>
-<style>body{font:15px Segoe UI,sans-serif;margin:24px;background:#111;color:#eee}h1{margin:0 0 4px}.b{display:inline-block;padding:4px 10px;border-radius:4px;background:rgb($($c.R),$($c.G),$($c.B))}td,th{padding:4px 10px;text-align:left;border-bottom:1px solid #333}li{margin:3px 0}</style>
+<style>body{font:15px Segoe UI,sans-serif;margin:24px;background:#111;color:#eee}h1{margin:0 0 4px}.b{display:inline-block;padding:4px 10px;border-radius:4px;background:rgb($($c.R),$($c.G),$($c.B))}td,th{padding:4px 10px;text-align:left;border-bottom:1px solid #333}li{margin:3px 0;list-style:none}li::before{content:'';display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:8px;background:#8c8c8c}.ok::before{background:#78cd91}.attention{color:#f5be50}.attention::before{background:#f5be50}.alerte{color:#f56e5f}.alerte::before{background:#f56e5f}</style>
 <h1>$(& $h $s.reference)</h1><p>$(& $h $s.machine) · <span class="b">$(& $h $ton[0])</span></p>
-<ul>$lignes</ul><h2>Cartes réseau</h2><table><tr><th>Carte</th><th>IPv4</th><th>Passerelle</th><th>Profil</th><th>Débit</th><th>Type</th></tr>$cartes</table>
+<ul>$lignes</ul>$releve<h2>Cartes réseau</h2><table><tr><th>Carte</th><th>IPv4</th><th>Passerelle</th><th>Profil</th><th>Débit</th><th>Type</th></tr>$cartes</table>
 <p style="color:#888">Les commandes se donnent depuis AVDiagram, Parc, Postes. Ce poste ne change rien de lui-même.</p></html>
 "@
     if (-not (Test-Path $perso)) { New-Item -ItemType Directory -Path $perso -Force | Out-Null }
@@ -165,7 +163,7 @@ if ($Detail) {
 # --- Le fond, écran par écran --------------------------------------------------
 
 try {
-Add-Type -TypeDefinition @'
+Add-Type -TypeDefinition @"
 using System;
 using System.Runtime.InteropServices;
 namespace PointeNoire {
@@ -205,7 +203,7 @@ namespace PointeNoire {
     public static void Placer(int position) { F().SetPosition(position); }
   }
 }
-'@
+"@
 [void][PointeNoire.Ecrans]::SetProcessDPIAware()
 $ecrans = @([PointeNoire.Ecrans]::Liste() | ForEach-Object { [pscustomobject]@{ id = $_.Id; l = $_.Largeur; h = $_.Hauteur; principal = ($_.Gauche -eq 0 -and $_.Haut -eq 0) } })
 if (-not (Test-Path $perso)) { New-Item -ItemType Directory -Path $perso -Force | Out-Null }
@@ -265,6 +263,7 @@ if ($aLaUne) {
 
 $noir = $s.actives -contains 'fond'
 $ton = Get-Ton $s
+$releve = $null
 $horodate = (Get-Date).ToString('yyyyMMddHHmmss')
 $images = @()
 $rang = 0
@@ -274,15 +273,17 @@ foreach ($e in $ecrans) {
     $g = [Drawing.Graphics]::FromImage($bmp)
     $g.TextRenderingHint = [Drawing.Text.TextRenderingHint]::AntiAliasGridFit
     $g.Clear([Drawing.Color]::Black)
-    if ($e.principal) {
-        # Le même panneau en bas à droite. En mode événement (partie « fond ») :
-        # l'étiquette en grand, sans le détail réseau.
+    if ($e.principal -and $noir -and (Get-Command Show-Evenement -ErrorAction SilentlyContinue)) {
+        if (-not $releve) { $releve = Get-Releve $s }
+        Show-Evenement $g $l $h $s $releve $ton[0].ToUpper()
+    } elseif ($e.principal) {
+        # Le panneau en bas à droite.
         $k = $h / 1080
         $titre = New-Object Drawing.Font 'Segoe UI Semibold', ([float](34 * $k))
-        $etiquette = New-Object Drawing.Font 'Segoe UI Semibold', ([float]($(if ($noir) { 24 } else { 15 }) * $k))
+        $etiquette = New-Object Drawing.Font 'Segoe UI Semibold', ([float](15 * $k))
         $texte = New-Object Drawing.Font 'Segoe UI', ([float](13 * $k))
-        $libelle = $(if ($noir) { $ton[0].ToUpper() } else { $ton[0] })
-        $lignes = @($(if ($noir) { Get-LignesEvenement $s } else { Get-Lignes $s }))
+        $libelle = $ton[0]
+        $lignes = @(Get-Lignes $s)
         $taille = $g.MeasureString($libelle, $etiquette)
         $lh = [float]($taille.Height + 2 * $k)
         $pl = [float](620 * $k); $ph = [float]((96 + 24 * $lignes.Count) * $k + $lh)
