@@ -109,7 +109,9 @@ $scriptSession = @'
 $r = [ordered]@{ le = (Get-Date).ToString('o'); notifications = '' }
 try {
     $null = [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime]
-    $r.notifications = [string][Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell\v1.0\powershell.exe').Setting
+    # L'identifiant de PowerShell, connu de Windows. Un réglage vide n'est pas « activé ».
+    $v = [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell\v1.0\powershell.exe').Setting
+    $r.notifications = $(if ($null -eq $v) { 'illisible : Windows rend un réglage vide' } else { [string]$v })
 } catch { $r.notifications = "illisible : $($_.Exception.Message)" }
 $d = Join-Path $env:LOCALAPPDATA 'PointeNoire'
 if (-not (Test-Path $d)) { New-Item -ItemType Directory -Path $d -Force | Out-Null }
