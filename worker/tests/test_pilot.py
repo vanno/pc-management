@@ -457,6 +457,8 @@ class AgentScriptTests(unittest.TestCase):
         # Ce qui ne tient pas dans une colonne est compté, jamais perdu sans le dire.
         self.assertIn("sur la page « État du poste »", releve)
         self.assertIn("$coupes = @($a, $b)", releve)
+        # Une colonne trop longue raccourcit sa plus longue section, pas la dernière.
+        self.assertIn("$cible.vues--", releve)
         self.assertNotIn("WSearch", releve)
         self.assertNotIn("à peine lisible", fond)
         self.assertIn("'Réussi' } else { 'Échec' }", fond)

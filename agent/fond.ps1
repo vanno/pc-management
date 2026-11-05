@@ -13,7 +13,7 @@
   Autres écrans : noir uni, rien ne part vers un projecteur ou un mur LED.
   Partie « fond » du mode événement : l'écran d'un technicien du direct. Un
   bandeau jaune « MODE ÉVÉNEMENT » (depuis quand, heure du relevé), ce qui est
-  à vérifier, puis trois colonnes toujours à la même place : réseau (câble,
+  à vérifier, puis trois colonnes dans un ordre fixe : réseau (câble,
   adresse, profil pour NDI, passerelle, internet, port RTMP), écrans et son
   (définition et fréquence réelles, appareils par défaut), machine (secteur,
   disques, mémoire, redémarrage attendu), services, logiciels du direct lancés

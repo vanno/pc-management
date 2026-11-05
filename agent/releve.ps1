@@ -348,7 +348,7 @@ function Get-Releve($s) {
 }
 
 # L'écran principal en mode événement : le bandeau jaune, ce qui est à vérifier,
-# puis trois colonnes, toujours à la même place.
+# puis trois colonnes de hauteur proche, les sections toujours dans le même ordre.
 function Show-Evenement($g, [int]$l, [int]$h, $s, $r, [string]$Libelle) {
     $k = [Math]::Min($h / 1080, $l / 1920)
     $police = { param([float]$t, [bool]$gras) New-Object Drawing.Font $(if ($gras) { 'Segoe UI Semibold' } else { 'Segoe UI' }), ([float]($t * $k)) }
@@ -397,8 +397,9 @@ function Show-Evenement($g, [int]$l, [int]$h, $s, $r, [string]$Libelle) {
     }
     $y += $haut + 14 * $k
     # Les colonnes : les sections gardent leur ordre et se répartissent pour que
-    # la plus haute des trois colonnes soit la plus basse possible. Ce qui ne
-    # tient pas est compté en bas de la colonne, jamais perdu sans le dire.
+    # la plus haute des trois colonnes soit la plus basse possible. Si une colonne
+    # déborde, sa section la plus longue se raccourcit, avec juste dessous le
+    # compte de ce qui manque : rien ne disparaît sans le dire.
     $titre = & $police 14 $true; $ecrit = & $police 18 $false
     $gris = & $pinceau ([Drawing.Color]::FromArgb(160, 160, 160))
     $cw = [float](($pw - 2 * 14 * $k) / 3)
@@ -408,8 +409,8 @@ function Show-Evenement($g, [int]$l, [int]$h, $s, $r, [string]$Libelle) {
         $lignesBloc = @(foreach ($ligne in $r.sections[$nom]) {
             [pscustomobject]@{ t = $ligne.t; n = $ligne.n; m = @(Split-Texte $g $ligne.t $ecrit ($cw - 48 * $k)) }
         })
-        $rangs = 0; foreach ($x in $lignesBloc) { $rangs += $x.m.Count }
-        [pscustomobject]@{ nom = $nom; lignes = $lignesBloc; h = 46 + 27 * $rangs }
+        $cumul = @(0); foreach ($x in $lignesBloc) { $cumul += $cumul[-1] + $x.m.Count }
+        [pscustomobject]@{ nom = $nom; lignes = $lignesBloc; cumul = $cumul; vues = $lignesBloc.Count; h = 46 + 27 * $cumul[-1] }
     })
     $nb = $blocs.Count; $coupes = @(0, 0); $pire = [double]::MaxValue
     for ($a = 0; $a -le $nb; $a++) {
@@ -421,17 +422,37 @@ function Show-Evenement($g, [int]$l, [int]$h, $s, $r, [string]$Libelle) {
         }
     }
     $fin = $bas - 7 * $k
+    # Le compte gris de ce qui ne tient pas, à la place que la colonne lui garde.
+    $compte = { param([int]$n, [float]$yy)
+        $t = "+ $n $(if ($n -gt 1) { 'lignes' } else { 'ligne' }) sur la page « État du poste »"
+        $g.DrawString((Get-Ajuste $g $t $ecrit ($cw - 30 * $k)), $ecrit, $gris, $cx, $yy)
+    }
     for ($c = 0; $c -lt 3; $c++) {
-        $cx = [float]($x0 + $c * ($cw + 14 * $k) + 22 * $k); $cy = $y + 16 * $k
         $de = @(0, $coupes[0], $coupes[1])[$c]; $jusque = @($coupes[0], $coupes[1], $nb)[$c]
-        $restantes = 0; for ($i = $de; $i -lt $jusque; $i++) { $restantes += $blocs[$i].lignes.Count }
+        if ($de -ge $jusque) { continue }
+        $cx = [float]($x0 + $c * ($cw + 14 * $k) + 22 * $k); $cy = $y + 16 * $k
+        $col = @($blocs[$de..($jusque - 1)])
+        $cible = $null
+        while ($true) {
+            $total = 0
+            foreach ($b in $col) { $total += 46 + 27 * ($b.cumul[$b.vues] + $(if ($b.vues -lt $b.lignes.Count) { 1 } else { 0 })) }
+            if ($total * $k -le $fin - $cy) { break }
+            if (-not $cible -or $cible.vues -le 2) {
+                $cible = $null
+                foreach ($b in $col) { if ($b.vues -gt 2 -and (-not $cible -or $b.vues -gt $cible.vues)) { $cible = $b } }
+                if (-not $cible) { break }
+            }
+            $cible.vues--
+        }
+        $restantes = 0; foreach ($b in $col) { $restantes += $b.lignes.Count }
         $plein = $false
-        for ($i = $de; $i -lt $jusque -and -not $plein; $i++) {
+        foreach ($b in $col) {
             # Un titre ne descend que si une ligne tient dessous, avec la place du compte s'il en reste.
             if ($fin - $cy -lt (28 + 27 * $(if ($restantes -gt 1) { 2 } else { 1 })) * $k) { $plein = $true; break }
-            $g.DrawString($blocs[$i].nom.ToUpper(), $titre, $gris, $cx, [float]$cy)
+            $g.DrawString($b.nom.ToUpper(), $titre, $gris, $cx, [float]$cy)
             $cy += 28 * $k
-            foreach ($ligne in $blocs[$i].lignes) {
+            for ($j = 0; $j -lt $b.vues; $j++) {
+                $ligne = $b.lignes[$j]
                 $place = [int][Math]::Floor(($fin - $cy) / (27 * $k)) - $(if ($restantes -gt 1) { 1 } else { 0 })
                 if ($place -lt 1) { $plein = $true; break }
                 $morceaux = $ligne.m
@@ -441,11 +462,11 @@ function Show-Evenement($g, [int]$l, [int]$h, $s, $r, [string]$Libelle) {
                 foreach ($m in $morceaux) { $g.DrawString($m, $ecrit, $encreLigne, [float]($cx + 18 * $k), [float]$cy); $cy += 27 * $k }
                 $restantes--
             }
+            if ($plein) { break }
+            $caches = $b.lignes.Count - $b.vues
+            if ($caches -gt 0 -and $cy + 27 * $k -le $fin) { & $compte $caches $cy; $cy += 27 * $k; $restantes -= $caches }
             $cy += 18 * $k
         }
-        if ($restantes -gt 0) {
-            $compte = "+ $restantes $(if ($restantes -gt 1) { 'lignes' } else { 'ligne' }) sur la page « État du poste »"
-            $g.DrawString((Get-Ajuste $g $compte $ecrit ($cw - 30 * $k)), $ecrit, $gris, $cx, [float][Math]::Min($cy, $fin - 27 * $k))
-        }
+        if ($restantes -gt 0) { & $compte $restantes ([Math]::Min($cy, $fin - 27 * $k)) }
     }
 }
