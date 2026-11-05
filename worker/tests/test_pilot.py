@@ -459,6 +459,9 @@ class AgentScriptTests(unittest.TestCase):
         self.assertIn("$coupes = @($a, $b)", releve)
         # Une colonne trop longue raccourcit sa plus longue section, pas la dernière.
         self.assertIn("$cible.vues--", releve)
+        # Ce que le technicien veut voir part en dernier, et l'écran normal n'est jamais raccourci pour rien.
+        self.assertIn("min = $(if ($nom -in 'Protections', 'Dernières actions') { 2 } else { 1 })", releve)
+        self.assertIn("$total = -18", releve)
         self.assertNotIn("WSearch", releve)
         self.assertNotIn("à peine lisible", fond)
         self.assertIn("'Réussi' } else { 'Échec' }", fond)
