@@ -425,15 +425,21 @@ function Test-Supervision([bool]$Actif) {
     }
     $conf = Get-Item -LiteralPath (Join-Path $d 'config.json') -ErrorAction SilentlyContinue
     if (-not $t -or -not $conf) { Add-Point 'Sonde' $false 'pas installée'; return }
-    # Premier passage 10 secondes après la pose : il envoie la première mesure.
-    for ($i = 0; $i -lt 45; $i++) {
+    # Premier passage 10 secondes après la pose, puis deux mesures de 28
+    # secondes avant l'envoi : la première mesure part vers 70 secondes. Tant
+    # que la sonde tourne, Windows donne 267009 (SCHED_S_TASK_RUNNING) comme
+    # dernier résultat : ce n'est pas une erreur.
+    $attente = 100
+    $fin = (Get-Date).AddSeconds($attente)
+    do {
         $t = Get-ScheduledTask -TaskName $tache
         $info = $t | Get-ScheduledTaskInfo
         if ($t.State -eq 'Disabled' -or ($info.LastRunTime -ge $conf.LastWriteTime -and $t.State -ne 'Running')) { break }
         Start-Sleep -Seconds 1
-    }
+    } while ((Get-Date) -lt $fin)
     if ($t.State -eq 'Disabled') { Add-Point 'Sonde' $false 'coupée : AVDiagram a refusé son jeton' }
-    elseif ($info.LastRunTime -lt $conf.LastWriteTime) { Add-Point 'Sonde' $null 'pas encore passée après 45 secondes' }
+    elseif ($info.LastRunTime -lt $conf.LastWriteTime) { Add-Point 'Sonde' $null "pas encore passée après $attente secondes" }
+    elseif ($t.State -eq 'Running' -or $info.LastTaskResult -eq 267009) { Add-Point 'Sonde' $null "première mesure encore en cours après $attente secondes" }
     elseif ($info.LastTaskResult -ne 0) { Add-Point 'Sonde' $false "arrêtée en erreur (code $($info.LastTaskResult))" }
     elseif (Test-Path (Join-Path $d 'en-attente.json')) { Add-Point 'Sonde' $false 'mesures en attente, AVDiagram ne les a pas reçues' }
     else { Add-Point 'Sonde' $true "première mesure envoyée à $($info.LastRunTime.ToString('HH:mm:ss'))" }
