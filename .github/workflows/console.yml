@@ -1,0 +1,56 @@
+# Console régie locale : tests, exécutable Windows, essai sous Windows
+# PowerShell 5.1 avec la partie poste (agent/console.ps1, agent/supervision.ps1).
+# À chaque fusion dans main, l'exécutable est publié en release :
+# https://github.com/vanno/pc-management/releases/latest/download/console-regie.exe
+name: Console régie
+
+on:
+  pull_request:
+    paths: ["console/**", "agent/console*.ps1", "agent/supervision.ps1", "worker/pcm/regie.py", ".github/workflows/console.yml"]
+  push:
+    branches: [main]
+    paths: ["console/**", "agent/console*.ps1", "agent/supervision.ps1", "worker/pcm/regie.py", ".github/workflows/console.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Dépendances
+        run: python -m pip install -r console/requirements.txt pyinstaller==6.11.1
+
+      - name: Tests de la console
+        working-directory: console
+        run: python -m unittest discover -s tests -v
+
+      - name: Exécutable
+        working-directory: console
+        run: python -m PyInstaller --onefile --console --name console-regie --paths . --distpath dist --workpath build console-regie.py
+
+      - name: Essai sous Windows PowerShell 5.1
+        shell: powershell
+        run: .\console\essai-windows.ps1 -Exe .\console\dist\console-regie.exe
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: console-regie
+          path: console/dist/console-regie.exe
+
+      - name: Release
+        if: github.ref == 'refs/heads/main'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="console-${GITHUB_SHA::7}"
+          gh release create "$tag" console/dist/console-regie.exe --target "$GITHUB_SHA" --latest \
+            --title "Console régie ${GITHUB_SHA::7}" --notes "Console régie locale construite depuis ${GITHUB_SHA}."

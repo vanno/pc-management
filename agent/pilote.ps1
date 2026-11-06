@@ -437,7 +437,8 @@ function Install-Sonde($p) {
     & icacls.exe $dossierSonde /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' | Out-Null
     Write-Utf8 (Join-Path $dossierSonde 'supervision.ps1') $script
     Write-Utf8 (Join-Path $dossierSonde 'config.json') ([ordered]@{ url = $p.url; jeton = $p.jeton } | ConvertTo-Json)
-    Remove-Item -Path (Join-Path $dossierSonde 'en-attente.json') -ErrorAction SilentlyContinue
+    # La console régie est reposée juste après par console-pose.ps1, s'il y en a une.
+    foreach ($f in 'en-attente.json', 'console.ps1', 'console.json', 'console-vue.json') { Remove-Item -Path (Join-Path $dossierSonde $f) -ErrorAction SilentlyContinue }
     $fichier = Join-Path $dossierSonde 'supervision.ps1'
     $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$fichier`""
     $chaqueMinute = New-ScheduledTaskTrigger -Once -At (Get-Date).AddSeconds(10) -RepetitionInterval (New-TimeSpan -Minutes 1)

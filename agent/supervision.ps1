@@ -18,6 +18,10 @@
       down = true (état dans liens.json) : c'est le seul regard sur le câble
       quand le switch n'est pas manageable.
 
+  Avec une console régie posée (console.ps1, lot 1 de la console), chaque
+  mesure part aussi vers elle sur le LAN dès qu'elle est prise, sans attendre
+  internet. Une panne de la console ne change rien à l'envoi vers AVDiagram.
+
   Sans réseau, les mesures attendent dans en-attente.json (10 au plus) et
   partent à l'exécution suivante. Un 401 veut dire sonde retirée ou
   remplacée : la tâche se désactive, sauf si config.json porte déjà un jeton
@@ -157,6 +161,11 @@ function Get-Mesure($Avant, $Apres, [double]$Secondes) {
     }
 }
 
+function Send-Regie($Mesure) {
+    $regie = Join-Path $dir 'console.ps1'
+    if (Test-Path $regie) { try { & $regie -Mesure $Mesure } catch { } }
+}
+
 $mesures = @()
 $debut = Get-Date
 $avant = Get-Compteurs
@@ -166,7 +175,9 @@ foreach ($k in 1, 2) {
     if ($reste -gt 0) { Start-Sleep -Milliseconds ([int]($reste * 1000)) }
     $apres = Get-Compteurs
     $maintenant = Get-Date
-    $mesures += , (Get-Mesure $avant $apres ($maintenant - $t).TotalSeconds)
+    $m = Get-Mesure $avant $apres ($maintenant - $t).TotalSeconds
+    $mesures += , $m
+    if ($k -eq 1) { Send-Regie $m }
     $avant = $apres
     $t = $maintenant
 }
@@ -175,6 +186,7 @@ if ($coupes.Count -and $mesures.Count) {
     $derniere = $mesures[$mesures.Count - 1]
     $derniere.nics = @(@($derniere.nics) + $coupes | Select-Object -First 8)
 }
+if ($mesures.Count) { Send-Regie $mesures[$mesures.Count - 1] }
 
 $envoi = @()
 if (Test-Path $attente) {

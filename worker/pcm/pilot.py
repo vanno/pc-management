@@ -40,6 +40,7 @@ from pathlib import Path
 from typing import Callable
 from urllib.parse import urlparse
 
+from . import regie
 from .meshctrl import MeshCtrl, MeshError
 
 MARKER = "PNPL1:"
@@ -55,6 +56,9 @@ SURVEY_INSTALLER = Path(__file__).resolve().parents[2] / "agent" / "releve-pose.
 THUMBNAIL_SCRIPT = Path(__file__).resolve().parents[2] / "agent" / "vignette.ps1"
 THUMBNAIL_INSTALLER = Path(__file__).resolve().parents[2] / "agent" / "vignette-pose.ps1"
 CHECK_SCRIPT = Path(__file__).resolve().parents[2] / "agent" / "controle.ps1"
+# L'envoi à la console régie locale, posé dans le dossier de la sonde.
+CONSOLE_SCRIPT = Path(__file__).resolve().parents[2] / "agent" / "console.ps1"
+CONSOLE_INSTALLER = Path(__file__).resolve().parents[2] / "agent" / "console-pose.ps1"
 # Ce qui reste sur un poste après la commande qui l'a posé : l'écran (fond et
 # relevé du mode événement) et le mur. Après une mise à jour du relais, ces
 # scripts gardent leur ancienne version jusqu'à leur prochaine pose.
@@ -63,7 +67,7 @@ CHECK_SCRIPT = Path(__file__).resolve().parents[2] / "agent" / "controle.ps1"
 POSED = {
     "fond": (WALLPAPER_SCRIPT, WALLPAPER_INSTALLER, SURVEY_SCRIPT, SURVEY_INSTALLER),
     "vignette": (THUMBNAIL_SCRIPT, THUMBNAIL_INSTALLER),
-    "supervision": (PROBE_SCRIPT,),
+    "supervision": (PROBE_SCRIPT, CONSOLE_SCRIPT, CONSOLE_INSTALLER),
 }
 MESSAGE_KINDS = ("toast", "boite")
 MESSAGE_MAX = 500
@@ -334,17 +338,28 @@ def diagnostic(mesh: MeshCtrl, device_id: str, params: dict, new_nonce: Callable
     return bool(reply.get("ok")), detail[:1].upper() + detail[1:], data
 
 
-def supervision(mesh: MeshCtrl, device_id: str, unit_id: str, params: dict, avd, new_nonce: Callable[[], str], script: str | None = None) -> tuple[bool, str]:
+def supervision(mesh: MeshCtrl, device_id: str, unit_id: str, params: dict, avd, new_nonce: Callable[[], str], script: str | None = None, reference: str = "") -> tuple[bool, str]:
     """Pose la sonde (jeton tiré par AVDiagram, envoyé tel quel au poste) ou la retire.
-    Le jeton ne passe pas par le journal du worker."""
+    Le jeton ne passe pas par le journal du worker. Après la pose, l'envoi à la
+    console régie locale (config/consoles.json) est posé ou retiré à son tour."""
     if not isinstance(params.get("actif"), bool):
         return False, "Paramètre `actif` manquant."
     if not unit_id:
         return False, "La tâche ne dit pas quel exemplaire superviser."
+    consoles: list[dict] = []
+    if params["actif"]:
+        try:
+            consoles = regie.load()
+        except regie.ConsoleError as exc:
+            return False, f"Console régie : {exc}"
+        if consoles and not REFERENCE_RE.fullmatch(reference or ""):
+            return False, "Référence du poste illisible pour la console régie."
     try:
         if params["actif"]:
             probe = avd.create_probe(unit_id)
-            packed = base64.b64encode(gzip.compress(PROBE_SCRIPT.read_bytes(), mtime=0)).decode("ascii")
+            # Sans ses commentaires : la commande de pose est près de la longueur
+            # que l'agent accepte (pilote.ps1 et la sonde, tous deux emballés).
+            packed = pack(slim(PROBE_SCRIPT.read_text(encoding="utf-8-sig")).encode("utf-8"))
             request = {"op": "supervision", "actif": True, "url": probe["url"], "jeton": probe["token"], "script": packed}
         else:
             avd.remove_probe(unit_id)
@@ -355,7 +370,20 @@ def supervision(mesh: MeshCtrl, device_id: str, unit_id: str, params: dict, avd,
     except Exception as exc:  # AvdError et réponse inattendue
         return False, f"AVDiagram : {exc}"
     detail = reply.get("detail") or ""
-    return bool(reply.get("ok")), detail[:1].upper() + detail[1:]
+    text = detail[:1].upper() + detail[1:]
+    if not reply.get("ok") or not consoles:
+        return bool(reply.get("ok")), text
+    # La pose de la sonde retire une console posée avant (pilote.ps1), son
+    # retrait emporte tout le dossier : seule une console connue est reposée.
+    body = {"op": "console", "actif": True, "reference": reference.upper(), "consoles": regie.for_probe(consoles, reference)}
+    try:
+        second = call(mesh, device_id, body, new_nonce, script=with_source(CONSOLE_INSTALLER.read_text(encoding="utf-8"), CONSOLE_SCRIPT, "RegieSource"))
+    except (MeshError, PilotError) as exc:
+        return True, f"{text}. Console régie pas posée : {exc}"
+    extra = second.get("detail") or "pas de réponse"
+    if not second.get("ok"):
+        return True, f"{text}. Console régie pas posée : {extra}"
+    return True, f"{text}. {extra[:1].upper() + extra[1:]}"
 
 
 def wallpaper(mesh: MeshCtrl, device_id: str, reference: str, params: dict, new_nonce: Callable[[], str], script: str | None = None) -> tuple[bool, str] | tuple[bool, str, dict]:
@@ -510,6 +538,9 @@ def posed_versions() -> dict[str, str]:
         h = hashlib.sha256()
         for path in paths:
             h.update(path.read_bytes())
+        if action == "supervision":
+            # Une console régie ajoutée ou retirée sur le NAS fait reposer la sonde.
+            h.update(regie.fingerprint_of_config())
         out[action] = h.hexdigest()[:12]
     return out
 
@@ -522,10 +553,14 @@ def with_wallpaper(installer: str, path: Path = WALLPAPER_SCRIPT) -> str:
     """Un script du fond en tête de fond-pose.ps1, dans `$FondSource` : une
     seule compression pour les deux, au lieu d'un base64 dans le base64 des
     paramètres."""
+    return with_source(installer, path, "FondSource")
+
+
+def with_source(installer: str, path: Path, variable: str) -> str:
     source = path.read_text(encoding="utf-8-sig")
     if re.search(r"^'@", source, re.M):
         raise PilotError(f"{path.name} a une ligne qui commence par '@ : il ne peut pas voyager dans une chaîne @' '@.")
-    return f"$FondSource = @'\n{source}\n'@\n{installer}"
+    return f"${variable} = @'\n{source}\n'@\n{installer}"
 
 
 def send(mesh: MeshCtrl, device_id: str, item: dict, params: dict, new_nonce: Callable[[], str], script: str | None = None) -> tuple[bool, str]:
