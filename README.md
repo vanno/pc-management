@@ -38,7 +38,7 @@ synchronisé sur sa fiche du parc AVDiagram.
    (`http://127.0.0.1:8088/api`) quand vMix est ouvert. vMix fermé, l'édition
    vue la dernière fois est gardée avec sa date. Les heures sous tension du
    disque système servent de compteur d'utilisation du poste. AVDiagram en
-   garde un point par jour (migration 0088) pour prévoir l'usure.
+   garde un point par jour (migration 0089) pour prévoir l'usure.
 
    Inventaire à l'allumage : un poste qui apparaît en ligne dans MeshCentral
    reçoit une tâche « Inventaire à l'allumage », au plus une fois toutes les
