@@ -601,16 +601,33 @@ function Get-PlanActif {
     return $null
 }
 
+$nomPlan = 'Pointe Noire production'
+
+# Avant le 2026-11-05, chaque allègement créait ce plan sans le garder.
+function Get-PlansProduction {
+    foreach ($l in @(& powercfg.exe /list)) {
+        $m = [regex]::Match([string]$l, '([0-9a-fA-F-]{36})\s+\((.+)\)')
+        if ($m.Success -and $m.Groups[2].Value.Trim() -eq $nomPlan) { $m.Groups[1].Value.ToLower() }
+    }
+}
+
 function Set-PlanProduction($etat) {
     if (-not $etat.plan) { $etat.plan = [ordered]@{ avant = (Get-PlanActif); cree = $null } }
     $guid = $etat.plan.cree
+    $faits = @(Get-PlansProduction)
+    if ($faits -notcontains $guid) {
+        # Un plan laissé par un allègement d'avant : l'actif s'il en est un.
+        $a = Get-PlanActif
+        $guid = $(if ($faits -contains $a) { $a } else { $faits | Select-Object -First 1 })
+        $etat.plan.cree = $guid
+    }
     if (-not $guid) {
         $texte = (& powercfg.exe /duplicatescheme $planOptimal) -join ' '
         $m = [regex]::Match($texte, '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}')
         if ($LASTEXITCODE -eq 0 -and $m.Success) {
             $guid = $m.Value.ToLower()
             $etat.plan.cree = $guid
-            & powercfg.exe /changename $guid 'Pointe Noire production' | Out-Null
+            & powercfg.exe /changename $guid $nomPlan | Out-Null
         } else {
             $guid = $planEleve
         }
@@ -621,6 +638,7 @@ function Set-PlanProduction($etat) {
     & powercfg.exe /setacvalueindex $guid SUB_PCIEXPRESS ASPM 0 | Out-Null
     & powercfg.exe /setactive $guid | Out-Null
     if ($LASTEXITCODE -ne 0) { return 'plan d''alimentation inchangé' }
+    $faits | Where-Object { $_ -ne $guid } | ForEach-Object { & powercfg.exe /delete $_ | Out-Null }
     if ($guid -eq $planEleve) { return 'plan Performances élevées' }
     return 'plan Performances optimales'
 }
@@ -673,9 +691,20 @@ function Enable-Nettoyage([bool]$Applications) {
         try { Disable-ScheduledTask -TaskPath $t.Substring(0, $i + 1) -TaskName $t.Substring($i + 1) -ErrorAction Stop | Out-Null; $taches++ } catch { $refus += "tâche $($t.Substring($i + 1))" }
     }
     $reglages = 0
+    $etat.proteges = @()
     foreach ($r in $reglagesNettoyage) {
-        try { Set-Valeur $r[0] $r[1] $r[2] 'DWord'; $reglages++ } catch { $refus += "réglage $($r[1]) ($($_.Exception.Message))" }
+        try { Set-Valeur $r[0] $r[1] $r[2] 'DWord'; $reglages++ }
+        catch {
+            # Windows 11 protège certaines clés par son pilote UCPD, même contre
+            # SYSTEM qui a tous les droits dessus (AllowNewsAndInterests sur PN09,
+            # le 2026-11-05) : le réglage reste à Windows, et le contrôle le sait.
+            if ($_.Exception -is [UnauthorizedAccessException] -and (Get-Service UCPD -ErrorAction SilentlyContinue).Status -eq 'Running') { $etat.proteges += $r[1] }
+            else { $refus += "réglage $($r[1]) ($($_.Exception.Message))" }
+        }
     }
+    # Le plan choisi et les réglages protégés sont gardés : le contrôle les
+    # relit, le retour supprime le plan.
+    Write-Utf8 $fichierNettoyage ($etat | ConvertTo-Json -Depth 6)
     $retirees = @()
     $sansListe = $null
     if ($Applications) {
@@ -702,6 +731,7 @@ function Enable-Nettoyage([bool]$Applications) {
     $txt = "profil appliqué : $plan, $services service(s) et $taches tâche(s) coupés, $reglages réglages posés"
     if ($Applications) { $txt += ", $(@($result.applications).Count) application(s) retirée(s)" }
     if ($sansListe) { $txt += ". Applications pas retirées : Windows refuse d'en donner la liste ($sansListe)" }
+    if ($etat.proteges.Count) { $txt += ". Laissé à Windows, qui le protège (pilote UCPD actif) : $($etat.proteges -join ', ')" }
     if ($refus.Count) { $txt += ". Refusé par Windows : $($refus -join ', ')" }
     $result.detail = $txt + '. Le démarrage rapide est coupé : effet complet au prochain redémarrage'
 }
@@ -717,7 +747,7 @@ function Disable-Nettoyage {
     if ($etat.plan -and $etat.plan.avant) {
         & powercfg.exe /setactive $etat.plan.avant | Out-Null
         if ($LASTEXITCODE -ne 0) { $echecs += 'plan d''alimentation' }
-        elseif ($etat.plan.cree) { & powercfg.exe /delete $etat.plan.cree | Out-Null }
+        else { @(Get-PlansProduction) + $etat.plan.cree | Where-Object { $_ -and $_ -ne $etat.plan.avant } | Sort-Object -Unique | ForEach-Object { & powercfg.exe /delete $_ | Out-Null } }
     }
     $services = 0
     foreach ($q in @($etat.services.PSObject.Properties)) {

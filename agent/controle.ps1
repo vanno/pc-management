@@ -242,7 +242,10 @@ function Test-Notifications([bool]$Actif, $Avant) {
         $s = [string]$sonde.bilans[$sid].notifications
         if (-not $ecrit) { [pscustomobject]@{ ok = $false; texte = "$nom : réglage pas écrit" } }
         elseif ($sonde.sessions -notcontains $sid) { [pscustomobject]@{ ok = $true; texte = "$nom : réglé, appliqué à sa prochaine session" } }
-        elseif (-not $s -or $s -like 'illisible*') { [pscustomobject]@{ ok = $null; texte = "$nom : réglé, effet pas relu dans sa session$(if ($s) { " ($s)" })" } }
+        # Windows 11 ne rend plus l'effet dans la session (ToastNotifier.Setting
+        # vide, 0x80070490, vu sur PN09 et PC-VANNH-BUREAU le 2026-11-05) : la
+        # valeur relue dans la ruche de la session ouverte fait foi.
+        elseif (-not $s -or $s -like 'illisible*') { [pscustomobject]@{ ok = $true; texte = "$nom : $(if ($Actif) { 'coupées' } else { 'rendues comme avant' }), relu dans le registre de sa session" } }
         elseif ($coupees -and $s -notlike 'Disabled*') { [pscustomobject]@{ ok = $false; texte = "$nom : réglé, mais Windows affiche encore les notifications" } }
         elseif (-not $coupees -and $s -eq 'DisabledForUser') { [pscustomobject]@{ ok = $false; texte = "$nom : réglé, mais Windows garde les notifications coupées" } }
         elseif ($coupees) { [pscustomobject]@{ ok = $true; texte = "$nom : coupées, relu par Windows" } }
@@ -385,8 +388,10 @@ function Test-Nettoyage([bool]$Actif) {
     if ($n) { Add-Point 'Tâches planifiées' (-not $ko.Count) $(if ($ko.Count) { $ko -join ', ' } elseif ($Actif) { "$n coupées" } else { "$n rendues" }) }
     $ko = @()
     if ($Actif) {
-        foreach ($r in $reglagesNettoyage) { if (-not (Test-Egal (Get-Valeur $r[0] $r[1]) $r[2])) { $ko += $r[1] } }
-        $n = $reglagesNettoyage.Count
+        $proteges = @($e.proteges | Where-Object { $_ })
+        foreach ($r in $reglagesNettoyage) { if ($proteges -notcontains $r[1] -and -not (Test-Egal (Get-Valeur $r[0] $r[1]) $r[2])) { $ko += $r[1] } }
+        $n = $reglagesNettoyage.Count - $proteges.Count
+        if ($proteges.Count) { Add-Point 'Réglages protégés' $true "laissés à Windows, qui les protège (UCPD) : $($proteges -join ', ')" }
     } else {
         $n = 0
         foreach ($q in @($e.reglages.PSObject.Properties)) {

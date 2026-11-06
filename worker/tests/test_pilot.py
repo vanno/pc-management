@@ -55,7 +55,11 @@ class CommandTests(unittest.TestCase):
         # Comme le fond : la sonde passe à 22 100 caractères en production.
         self.assertLess(len(cmd), 18_000)
         packed = re.search(r"FromBase64String\('([^']+)'\)\);\$g", cmd).group(1)
-        self.assertEqual(gzip.decompress(base64.b64decode(packed)).decode("utf-8"), pilot.AGENT_SCRIPT.read_text(encoding="utf-8"))
+        sent = gzip.decompress(base64.b64decode(packed)).decode("utf-8")
+        self.assertEqual(sent, pilot.slim(pilot.AGENT_SCRIPT.read_text(encoding="utf-8")))
+        # Commentaires vidés, lignes gardées : une erreur dit la ligne du fichier.
+        self.assertEqual(sent.count("\n"), pilot.AGENT_SCRIPT.read_text(encoding="utf-8").count("\n"))
+        self.assertNotIn("# --- Nettoyage", sent)
         self.assertEqual(pilot_params(cmd), ("ab12", {"op": "etat"}))
         with self.assertRaises(pilot.PilotError):
             pilot.build_command({}, "zz';")
@@ -72,7 +76,7 @@ class CommandTests(unittest.TestCase):
             # Le script arrive entier dans $FondSource, devant l'installeur.
             sent = pilot_script(cmd)
             self.assertTrue(sent.startswith("$FondSource = @'\n" + path.read_text(encoding="utf-8") + "\n'@\n"), path.name)
-            self.assertTrue(sent.endswith(installer.read_text(encoding="utf-8")), installer.name)
+            self.assertTrue(sent.endswith(pilot.slim(installer.read_text(encoding="utf-8"))), installer.name)
 
     def test_check_script_travels_alone_under_the_same_limit(self):
         body = {"op": "controle", "quoi": "evenement", "actif": True, "parties": list(pilot.EVENT_PARTS)}
@@ -83,6 +87,22 @@ class CommandTests(unittest.TestCase):
         body = {"op": "vignette", "actif": True, "url": "https://avd.exemple/api/v1/postes/vignettes", "jeton": "pnv_" + "a" * 43, "script": pilot.pack(pilot.THUMBNAIL_SCRIPT.read_bytes())}
         cmd = pilot.build_command(body, "ab12", script=pilot.THUMBNAIL_INSTALLER.read_text(encoding="utf-8"))
         self.assertLess(len(cmd), 16_000)
+
+    def test_slim_keeps_code_and_here_strings(self):
+        text = "\n".join([
+            "<#", "  en-tête", "#>", "# un commentaire", "    # indenté", "$a = 1 # reste",
+            "$s = @'", "# dans la chaîne", "\"@ pas la fin", "'@", "$t = @\"", "  # aussi", "\"@", "# après",
+        ])
+        self.assertEqual(pilot.slim(text).split("\n"), [
+            "", "", "", "", "", "$a = 1 # reste",
+            "$s = @'", "# dans la chaîne", "\"@ pas la fin", "'@", "$t = @\"", "  # aussi", "\"@", "",
+        ])
+        for path in (pilot.AGENT_SCRIPT, pilot.CHECK_SCRIPT, pilot.WALLPAPER_INSTALLER, pilot.SURVEY_INSTALLER, pilot.THUMBNAIL_INSTALLER, pilot.DIAGNOSTIC_SCRIPT):
+            text = path.read_text(encoding="utf-8")
+            kept = [l for l in pilot.slim(text).split("\n") if l.strip()]
+            code = [l for l in text.split("\n") if l.strip() and not l.strip().startswith("#")]
+            # Seules des lignes de commentaire partent (l'en-tête <# #> compris).
+            self.assertTrue(set(kept) <= set(code) | {l for l in text.split("\n") if l.strip().startswith("#")}, path.name)
 
     def test_parse_checks_nonce(self):
         with self.assertRaisesRegex(pilot.PilotError, "autre commande"):
@@ -193,6 +213,16 @@ class SupervisionTests(unittest.TestCase):
         self.assertEqual(avd.calls, [("create", "u1")])
         cmd = pilot.build_command(request, "ab12")
         self.assertLess(len(cmd), 24_000)
+
+    def test_probe_frees_a_stuck_meshcentral_command(self):
+        # MeshCentral ne lance qu'une commande à la fois par poste : la sonde
+        # ferme celle de l'agent restée ouverte plus de 90 minutes, jamais le terminal.
+        probe = pilot.PROBE_SCRIPT.read_text(encoding="utf-8-sig")
+        guard = probe[probe.index("Win32_Service"): probe.rindex("debloque.log")]
+        self.assertIn("ParentProcessId", guard)
+        self.assertIn("-noprofile -nologo -command -", guard)
+        self.assertIn("AddMinutes(-90)", guard)
+        self.assertLess(probe.rindex("debloque.log"), probe.index("$avant = Get-Compteurs"))
 
     def test_remove(self):
         mesh = FakeMesh({"supervision": [{"ok": True, "detail": "sonde retirée"}]})
@@ -501,6 +531,36 @@ class AgentScriptTests(unittest.TestCase):
         for path in self.SCRIPTS:
             text = path.read_text(encoding="utf-8-sig")
             self.assertNotRegex(text, r"@\(\$\w+\.alertes\)", path.name)
+
+    def test_cleanup_keeps_its_power_plan(self):
+        """PN09, 2026-11-05 : « Pointe Noire production » actif au lieu du plan
+        attendu. Le plan créé n'était pas gardé : le contrôle attendait
+        Performances élevées, et chaque allègement en créait un de plus."""
+        pilote = pilot.AGENT_SCRIPT.read_text(encoding="utf-8")
+        corps = pilote.split("function Enable-Nettoyage", 1)[1].split("\nfunction ", 1)[0]
+        apres = corps.split("$plan = Set-PlanProduction $etat", 1)[1]
+        self.assertLess(apres.index("Write-Utf8 $fichierNettoyage"), apres.index("$result.ok"), "plan gardé avant la réponse")
+        plan = pilote.split("function Set-PlanProduction", 1)[1].split("\nfunction ", 1)[0]
+        # Un plan déjà là sert avant d'en créer un, et les doublons partent.
+        self.assertLess(plan.index("Get-PlansProduction"), plan.index("/duplicatescheme"))
+        self.assertIn("$etat.plan.cree = $guid", plan.split("/duplicatescheme", 1)[0])
+        self.assertIn("ForEach-Object { & powercfg.exe /delete $_", plan.split("/setactive $guid", 1)[1])
+        retour = pilote.split("function Disable-Nettoyage", 1)[1].split("\nfunction ", 1)[0]
+        self.assertIn("@(Get-PlansProduction) + $etat.plan.cree", retour)
+        self.assertIn("$_ -ne $etat.plan.avant", retour)
+        self.assertEqual(pilote.count("'Pointe Noire production'"), 1)
+
+    def test_cleanup_leaves_ucpd_protected_settings_to_windows(self):
+        """PN09, 2026-11-05 : AllowNewsAndInterests refusé à SYSTEM, qui a
+        pourtant tous les droits sur la clé parente, pilote UCPD actif."""
+        pilote = pilot.AGENT_SCRIPT.read_text(encoding="utf-8")
+        corps = pilote.split("function Enable-Nettoyage", 1)[1].split("\nfunction ", 1)[0]
+        self.assertIn("$_.Exception -is [UnauthorizedAccessException] -and (Get-Service UCPD", corps)
+        self.assertLess(corps.index("$etat.proteges += $r[1]"), corps.rindex("Write-Utf8 $fichierNettoyage"))
+        controle = pilot.CHECK_SCRIPT.read_text(encoding="utf-8")
+        nettoyage = controle.split("function Test-Nettoyage", 1)[1].split("\nfunction ", 1)[0]
+        self.assertIn("$proteges -notcontains $r[1]", nettoyage)
+        self.assertIn("Add-Point 'Réglages protégés' $true", nettoyage)
 
     def test_cleanup_names_what_windows_refuses(self):
         """« Tentative d'exécution d'une opération non autorisée » sans plus :

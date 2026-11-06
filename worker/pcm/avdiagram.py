@@ -134,6 +134,13 @@ class AvdClient:
         planifiées) : { requested, busy, unknown }."""
         return self._request("POST", "/api/v1/postes/taches", {"action": action, "asset_tags": asset_tags, "params": params or {}})
 
+    def request_reposes(self, action: str, asset_tags: list[str]) -> dict:
+        """Après une mise à jour du relais : l'écran (`fond`) ou le mur
+        (`vignette`) reposé là où il est affiché, et seulement là. Un poste
+        éteint le reçoit à son allumage. { requested, busy, unknown }."""
+        body = {"action": action, "asset_tags": asset_tags, "params": {"actif": True}, "seulement_actifs": True, "attendre": True}
+        return self._request("POST", "/api/v1/postes/taches", body)
+
     def get_envoi(self, envoi_id: str) -> dict:
         """Un script approuvé ou un fichier de la bibliothèque d'envois (0075).
         Le fichier porte une adresse de téléchargement signée."""

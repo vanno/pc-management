@@ -1,11 +1,14 @@
 import base64
 import gzip
 import json
+import re
 import signal
 import tempfile
 import threading
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from unittest import mock
 
 from pcm.avdiagram import AvdError, Unit
 from pcm.meshctrl import Device, MeshError
@@ -658,3 +661,71 @@ class DiagnosticTests(unittest.TestCase):
         self.assertTrue(ok)
         self.assertIn("ports : 4/4", result)
         self.assertEqual(avd.diagnostics[0][1]["poste"], "PN01")
+
+
+class ReposeAvd(FakeAvd):
+    def __init__(self, *a, refus=0, **kw):
+        super().__init__(*a, **kw)
+        self.reposes = []
+        self.refus = refus
+
+    def request_reposes(self, action, asset_tags):
+        self.reposes.append((action, list(asset_tags)))
+        if self.refus:
+            self.refus -= 1
+            raise AvdError("action inconnue", 400)
+        return {"requested": 1, "busy": 0, "unknown": []}
+
+
+class ReposeTests(unittest.TestCase):
+    """PN09, 2026-11-05 : après la mise à jour du relais, l'ancien écran restait
+    tant qu'on ne retirait pas puis remettait l'état à l'écran."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.store = Store(Path(self.tmp.name) / "pcm.sqlite")
+        self.logs = []
+        self.now = datetime(2026, 11, 6, 9, 0, tzinfo=timezone.utc)
+
+    def tearDown(self):
+        self.store.db.close()
+        self.tmp.cleanup()
+
+    def service(self, avd):
+        return Service(FakeMesh([PN01, PN02]), avd, self.store, {"PN2": "PN02"}, logger=self.logs.append, clock=lambda: self.now)
+
+    def test_asks_once_per_version_for_screen_and_wall(self):
+        avd = ReposeAvd()
+        svc = self.service(avd)
+        svc.tick()
+        # Postes éteints compris : AVDiagram les fait attendre.
+        self.assertEqual(avd.reposes, [("fond", ["PN01", "PN02"]), ("vignette", ["PN01", "PN02"])])
+        svc.tick()
+        self.service(avd).tick()
+        self.assertEqual(len(avd.reposes), 2, "une seule demande par version, même après un redémarrage")
+
+    def test_new_version_asks_again(self):
+        avd = ReposeAvd()
+        self.service(avd).tick()
+        with mock.patch.object(pilot, "posed_versions", return_value={"fond": "autre", "vignette": pilot.posed_versions()["vignette"]}):
+            self.service(avd).tick()
+        self.assertEqual([a for a, _ in avd.reposes], ["fond", "vignette", "fond"])
+
+    def test_refusal_is_retried_after_an_hour(self):
+        avd = ReposeAvd(refus=2)
+        svc = self.service(avd)
+        svc.tick()
+        svc.tick()
+        self.assertEqual(len(avd.reposes), 2)
+        self.assertTrue(any("repose fond" in l and "impossible" in l for l in self.logs))
+        self.now += timedelta(hours=1, minutes=1)
+        svc.tick()
+        self.assertEqual([a for a, _ in avd.reposes], ["fond", "vignette", "fond", "vignette"])
+        svc.tick()
+        self.assertEqual(len(avd.reposes), 4)
+
+    def test_versions_follow_script_contents(self):
+        v = pilot.posed_versions()
+        self.assertEqual(set(v), {"fond", "vignette"})
+        self.assertTrue(all(re.fullmatch(r"[0-9a-f]{12}", x) for x in v.values()))
+        self.assertIn(pilot.SURVEY_SCRIPT, pilot.POSED["fond"])

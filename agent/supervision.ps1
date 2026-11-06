@@ -31,6 +31,22 @@ $attente = Join-Path $dir 'en-attente.json'
 $fichierLiens = Join-Path $dir 'liens.json'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
+# MeshCentral ne lance qu'une commande à la fois par poste, sans limite de
+# durée : une commande restée ouverte (un PowerShell qui attend la fin d'un
+# bloc écrit sur plusieurs lignes) bloque toutes les suivantes, celles du
+# relais comprises (PN09, le 2026-11-05). Passé 90 minutes, plus que la plus
+# longue tâche du relais, elle est fermée et notée dans debloque.log. Le
+# terminal de MeshCentral se lance autrement et n'est jamais touché.
+try {
+    $agents = @(Get-CimInstance Win32_Service -Filter "Name='Mesh Agent' OR PathName LIKE '%MeshAgent%'" | ForEach-Object { [int]$_.ProcessId } | Where-Object { $_ })
+    foreach ($p in @(Get-CimInstance Win32_Process -Filter "Name='powershell.exe'")) {
+        if ($agents -contains [int]$p.ParentProcessId -and [string]$p.CommandLine -match '-noprofile -nologo -command -\s*$' -and $p.CreationDate -lt (Get-Date).AddMinutes(-90)) {
+            Stop-Process -Id $p.ProcessId -Force
+            Add-Content -Path (Join-Path $dir 'debloque.log') -Encoding UTF8 -Value "$(Get-Date -Format s) commande MeshCentral fermée après $([int]((Get-Date) - $p.CreationDate).TotalMinutes) minutes (PID $($p.ProcessId))"
+        }
+    }
+} catch { }
+
 function Get-Compteurs {
     $r = @{}
     foreach ($a in @(Get-NetAdapter -Physical -ErrorAction SilentlyContinue | Where-Object { $_.Status -eq 'Up' })) {

@@ -53,6 +53,13 @@ SURVEY_INSTALLER = Path(__file__).resolve().parents[2] / "agent" / "releve-pose.
 THUMBNAIL_SCRIPT = Path(__file__).resolve().parents[2] / "agent" / "vignette.ps1"
 THUMBNAIL_INSTALLER = Path(__file__).resolve().parents[2] / "agent" / "vignette-pose.ps1"
 CHECK_SCRIPT = Path(__file__).resolve().parents[2] / "agent" / "controle.ps1"
+# Ce qui reste sur un poste après la commande qui l'a posé : l'écran (fond et
+# relevé du mode événement) et le mur. Après une mise à jour du relais, ces
+# scripts gardent leur ancienne version jusqu'à leur prochaine pose.
+POSED = {
+    "fond": (WALLPAPER_SCRIPT, WALLPAPER_INSTALLER, SURVEY_SCRIPT, SURVEY_INSTALLER),
+    "vignette": (THUMBNAIL_SCRIPT, THUMBNAIL_INSTALLER),
+}
 MESSAGE_KINDS = ("toast", "boite")
 MESSAGE_MAX = 500
 TITLE_MAX = 60
@@ -150,7 +157,7 @@ def build_command(params: dict, nonce: str, script: str | None = None) -> str:
         raise PilotError("Jeton invalide.")
     if script is None:
         script = AGENT_SCRIPT.read_text(encoding="utf-8")
-    packed = base64.b64encode(gzip.compress(script.encode("utf-8"), mtime=0)).decode("ascii")
+    packed = base64.b64encode(gzip.compress(slim(script).encode("utf-8"), mtime=0)).decode("ascii")
     p = base64.b64encode(json.dumps(params, ensure_ascii=False).encode("utf-8")).decode("ascii")
     return (
         f"$env:PNPL_NONCE='{nonce}';$env:PNPL_PARAMS='{p}';"
@@ -159,6 +166,36 @@ def build_command(params: dict, nonce: str, script: str | None = None) -> str:
         "$s=(New-Object IO.StreamReader($g,[Text.Encoding]::UTF8)).ReadToEnd();"
         "& ([ScriptBlock]::Create($s))"
     )
+
+
+_HERE_OPEN = re.compile(r"@(['\"])\s*$")
+
+
+def slim(script: str) -> str:
+    """Le script tel qu'il voyage : ses lignes de commentaire vidées, pas
+    retirées, pour que les numéros de ligne des erreurs restent ceux du
+    fichier. Une chaîne @' '@ ou @" "@ (fond.ps1 dans $FondSource, le script
+    réseau) voyage telle quelle, jusqu'à sa fermeture du même guillemet."""
+    out, close, block = [], None, False
+    for line in script.split("\n"):
+        stripped = line.strip()
+        if close:
+            if line.startswith(close):
+                close = None
+            out.append(line)
+        elif block:
+            block = "#>" not in line
+            out.append("")
+        elif stripped.startswith("<#"):
+            block = "#>" not in stripped[2:]
+            out.append("")
+        elif stripped.startswith("#"):
+            out.append("")
+        else:
+            m = _HERE_OPEN.search(line)
+            close = (m.group(1) + "@") if m else None
+            out.append(line)
+    return "\n".join(out)
 
 
 def parse_output(output: str, nonce: str) -> dict:
@@ -452,6 +489,18 @@ def message(mesh: MeshCtrl, device_id: str, name: str, params: dict, new_nonce: 
         return False, str(exc)
 
 
+def posed_versions() -> dict[str, str]:
+    """La version de chaque script posé, tirée de son contenu : elle change
+    seulement quand une mise à jour du relais le change."""
+    out = {}
+    for action, paths in POSED.items():
+        h = hashlib.sha256()
+        for path in paths:
+            h.update(path.read_bytes())
+        out[action] = h.hexdigest()[:12]
+    return out
+
+
 def pack(data: bytes) -> str:
     return base64.b64encode(gzip.compress(data, mtime=0)).decode("ascii")
 
@@ -594,3 +643,18 @@ def _describe(card: dict | None) -> str:
     addr = ", ".join(f"{a.get('ip')}/{a.get('prefixe')}" for a in card.get("adresses") or []) or "sans adresse"
     gw = card.get("passerelle")
     return addr + (f", passerelle {gw}" if gw else ", sans passerelle")
+
+
+def slim_fingerprints() -> dict[str, str]:
+    """L'empreinte de chaque script tel qu'il voyage, à comparer avec celle de
+    scripts/essai-windows.ps1, qui refait la découpe sous Windows."""
+    agent = AGENT_SCRIPT.parent
+    sent = {p.name: p.read_text(encoding="utf-8-sig") for p in sorted(agent.glob("*.ps1"))}
+    sent["releve-pose.ps1+releve.ps1"] = with_wallpaper(SURVEY_INSTALLER.read_text(encoding="utf-8"), SURVEY_SCRIPT)
+    sent["fond-pose.ps1+fond.ps1"] = with_wallpaper(WALLPAPER_INSTALLER.read_text(encoding="utf-8"), WALLPAPER_SCRIPT)
+    return {name: hashlib.sha256(slim(text).encode("utf-8")).hexdigest()[:12] for name, text in sent.items()}
+
+
+if __name__ == "__main__":
+    for name, fingerprint in slim_fingerprints().items():
+        print(f"{fingerprint}  {name}")

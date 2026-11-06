@@ -134,6 +134,7 @@ class Service:
         self.tool: dict = {"actions": list(ACTIONS)}
         self._version_at: datetime | None = None
         self._plan_failed: dict[str, datetime] = {}
+        self._repose_failed: dict[str, datetime] = {}
         self.data_dir = os.path.dirname(os.path.abspath(os.environ.get("PCM_DB", "data/pcm.sqlite")))
         if self.schedules:
             self.tool["schedule"] = {
@@ -165,6 +166,7 @@ class Service:
         ]
         self.seen = seen
         self._maintenance(by_tag)
+        self._repose(by_tag)
         self.tool["nas"] = self._nas_state()
         extra = {"tool": self.tool} if self.tool else {}
         tasks = self.avd.heartbeat(SOURCE, seen, limit=self.concurrency, **extra)
@@ -293,6 +295,30 @@ class Service:
                 continue
             self.store.set_last_run(name, now)
             self.log(f"planification {name} ({slot.label()}) : {res.get('requested', 0)} poste(s) en ligne, {res.get('busy', 0)} déjà occupé(s)")
+
+    def _repose(self, by_tag: dict[str, Device]) -> None:
+        """Après une mise à jour du relais qui change l'écran ou le mur, AVDiagram
+        les fait reposer là où ils sont affichés : un poste n'a plus besoin
+        qu'on retire puis remette son état à l'écran. Une seule demande par
+        version, retentée au plus une fois par heure si AVDiagram la refuse."""
+        if not by_tag or not hasattr(self.avd, "request_reposes"):
+            return
+        now = self.clock()
+        for action, version in pilot.posed_versions().items():
+            name = f"repose:{action}:{version}"
+            if self.store.last_run(name) is not None:
+                continue
+            failed = self._repose_failed.get(name)
+            if failed and now - failed < timedelta(hours=1):
+                continue
+            try:
+                res = self.avd.request_reposes(action, sorted(by_tag))
+            except AvdError as exc:
+                self._repose_failed[name] = now
+                self.log(f"repose {action} ({version}) impossible : {exc}")
+                continue
+            self.store.set_last_run(name, now)
+            self.log(f"repose {action} ({version}) : {res.get('requested', 0)} poste(s), {res.get('busy', 0)} déjà occupé(s)")
 
     @contextmanager
     def _pulse(self):
