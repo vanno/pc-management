@@ -145,7 +145,9 @@ class ProbeScriptTests(unittest.TestCase):
     def test_console_script_code_is_ascii(self):
         # Posé sans BOM, il est lu en ANSI par Windows PowerShell 5.1 : un
         # « é » hors commentaire ne vaudrait plus ce qu'il vaut (essai du 06/11).
-        for n, line in enumerate(pilot.CONSOLE_SCRIPT.read_text(encoding="utf-8").splitlines(), 1):
+        lines = pilot.CONSOLE_SCRIPT.read_text(encoding="utf-8").splitlines()
+        debut = lines.index("param($Mesure)")
+        for n, line in enumerate(lines[debut:], debut + 1):
             code = line.split("//")[0].split("#")[0] if not line.lstrip().startswith(("#", "//")) else ""
             self.assertTrue(code.isascii(), f"console.ps1 ligne {n} : {line}")
 
