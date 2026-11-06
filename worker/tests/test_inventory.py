@@ -137,7 +137,7 @@ class AvdPayloadTests(unittest.TestCase):
         self.assertEqual(h["hostname"], "PN01")
         self.assertEqual(h["os_edition"], "Professional")
         self.assertEqual(h["ram_gb"], 15.9)
-        self.assertEqual(h["disks"][0], {"model": "SAMSUNG MZVLB1T0", "size_gb": 953.9, "bus": "SCSI"})
+        self.assertEqual(h["disks"][0], {"model": "SAMSUNG MZVLB1T0", "size_gb": 953.9, "bus": "SCSI", "serial": "S4EM"})
         self.assertEqual(h["network"][0]["ipv4"], ["192.168.1.21"])
         self.assertEqual(h["battery_health_pct"], 80.0)
         self.assertEqual(p["software"][0], {"name": "vMix", "version": "27.0.0.49", "publisher": "StudioCoast Pty Ltd"})
@@ -158,3 +158,57 @@ class AvdPayloadTests(unittest.TestCase):
     def test_payload_is_json(self):
         data = inv.parse_output(agent_output(FIXTURE))
         json.dumps(inv.avd_payload(data))
+
+
+def schema2(**extra) -> dict:
+    """PN01 relevé par le script de schéma 2 : santé du disque, batterie, licences."""
+    data = json.loads(json.dumps(FIXTURE))
+    data["schema"] = 2
+    data["system"].update(family="IdeaPad 5 Pro 16ACH6", sku="LENOVO_MT_82K2", bios_date="2022-03-01T00:00:00.0000000Z")
+    data["disks"] = [dict(data["disks"] if isinstance(data["disks"], dict) else data["disks"][0],
+                          index=0, system=True, health="Healthy", media="SSD", bus="NVMe", wear_pct=7,
+                          temperature_c=38, power_on_hours=4210, read_errors=0, write_errors=None, predict_failure=False)]
+    data["battery"] = {"designed_mwh": 75000, "full_charged_mwh": 61500, "health_percent": 82.0, "cycle_count": 212}
+    data["licenses"] = {
+        "windows": {"status": 1, "name": "Windows(R), Professional edition", "description": "Windows(R) Operating System, OEM_DM channel",
+                    "channel": None, "partial_key": "3V66T", "firmware_key": True},
+        "vmix": {"running": True, "version": "27.0.0.49", "edition": "4K"},
+    }
+    data["software"] = [{"name": "vMix", "version": "27.0.0.49"}]
+    data.update(extra)
+    return data
+
+
+class Schema2Tests(unittest.TestCase):
+    def test_old_script_still_read(self):
+        self.assertEqual(inv.parse_output(agent_output(FIXTURE))["licenses"], {})
+
+    def test_disk_health_and_battery(self):
+        h = inv.avd_payload(inv.parse_output(agent_output(schema2())))["hardware"]
+        self.assertEqual(h["product"], "IdeaPad 5 Pro 16ACH6")
+        d = h["disks"][0]
+        self.assertEqual((d["bus"], d["media"], d["wear_pct"], d["power_on_hours"], d["system"]), ("NVMe", "SSD", 7, 4210, True))
+        self.assertFalse(d["predict_failure"])
+        self.assertNotIn("write_errors", d)
+        self.assertEqual((h["battery_cycles"], h["battery_design_mwh"], h["battery_full_mwh"]), (212, 75000, 61500))
+
+    def test_windows_license_channel_from_description(self):
+        w = inv.licenses(inv.parse_output(agent_output(schema2())))["windows"]
+        self.assertEqual(w, {"activated": True, "status": "activée", "channel": "OEM_DM", "name": "Windows(R), Professional edition", "partial_key": "3V66T", "firmware_key": True})
+
+    def test_vmix_edition_kept_when_closed(self):
+        before = inv.parse_output(agent_output(schema2()))
+        closed = schema2(collected_at="2026-11-07T08:00:00Z")
+        closed["licenses"]["vmix"] = None
+        now = inv.carry_over(inv.parse_output(agent_output(closed)), before)
+        v = inv.licenses(now)["vmix"]
+        self.assertEqual((v["edition"], v["edition_seen_at"], v["running"], v["installed_version"]), ("4K", before["collected_at"], False, "27.0.0.49"))
+        self.assertEqual(inv.avd_payload(now, previous=before)["hardware"]["licenses"]["vmix"]["edition"], "4K")
+
+    def test_bad_counters_ignored(self):
+        data = schema2()
+        data["disks"][0].update(wear_pct="", temperature_c=True, media="Unspecified")
+        d = inv.avd_payload(inv.parse_output(agent_output(data)))["hardware"]["disks"][0]
+        self.assertNotIn("wear_pct", d)
+        self.assertNotIn("temperature_c", d)
+        self.assertNotIn("media", d)
