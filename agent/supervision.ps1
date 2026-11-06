@@ -20,7 +20,8 @@
 
   Sans réseau, les mesures attendent dans en-attente.json (10 au plus) et
   partent à l'exécution suivante. Un 401 veut dire sonde retirée ou
-  remplacée : la tâche se désactive.
+  remplacée : la tâche se désactive, sauf si config.json porte déjà un jeton
+  neuf (sonde reposée pendant la mesure).
 #>
 
 $ErrorActionPreference = 'Stop'
@@ -188,10 +189,11 @@ try {
 } catch {
     $code = $null
     try { $code = [int]$_.Exception.Response.StatusCode } catch { }
-    if ($code -eq 401) {
-        Disable-ScheduledTask -TaskName 'PointeNoire-Supervision' -ErrorAction SilentlyContinue | Out-Null
-        Remove-Item -Path $attente -ErrorAction SilentlyContinue
-    } elseif ($code -eq 400) {
+    # Une sonde reposée entre-temps a un jeton neuf : seul l'ancien est refusé.
+    $jeton = $null
+    try { $jeton = (Get-Content -Raw -Path (Join-Path $dir 'config.json') | ConvertFrom-Json).jeton } catch { }
+    if ($code -eq 401 -and $jeton -eq $conf.jeton) { Disable-ScheduledTask -TaskName 'PointeNoire-Supervision' -ErrorAction SilentlyContinue | Out-Null }
+    if ($code -eq 401 -or $code -eq 400) {
         # Des mesures refusées ne repartent pas en boucle.
         Remove-Item -Path $attente -ErrorAction SilentlyContinue
     } else {

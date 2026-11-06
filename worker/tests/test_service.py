@@ -694,38 +694,38 @@ class ReposeTests(unittest.TestCase):
     def service(self, avd):
         return Service(FakeMesh([PN01, PN02]), avd, self.store, {"PN2": "PN02"}, logger=self.logs.append, clock=lambda: self.now)
 
-    def test_asks_once_per_version_for_screen_and_wall(self):
+    def test_asks_once_per_version_for_screen_wall_and_probe(self):
         avd = ReposeAvd()
         svc = self.service(avd)
         svc.tick()
         # Postes éteints compris : AVDiagram les fait attendre.
-        self.assertEqual(avd.reposes, [("fond", ["PN01", "PN02"]), ("vignette", ["PN01", "PN02"])])
+        self.assertEqual(avd.reposes, [("fond", ["PN01", "PN02"]), ("vignette", ["PN01", "PN02"]), ("supervision", ["PN01", "PN02"])])
         svc.tick()
         self.service(avd).tick()
-        self.assertEqual(len(avd.reposes), 2, "une seule demande par version, même après un redémarrage")
+        self.assertEqual(len(avd.reposes), 3, "une seule demande par version, même après un redémarrage")
 
     def test_new_version_asks_again(self):
         avd = ReposeAvd()
         self.service(avd).tick()
-        with mock.patch.object(pilot, "posed_versions", return_value={"fond": "autre", "vignette": pilot.posed_versions()["vignette"]}):
+        with mock.patch.object(pilot, "posed_versions", return_value={**pilot.posed_versions(), "fond": "autre"}):
             self.service(avd).tick()
-        self.assertEqual([a for a, _ in avd.reposes], ["fond", "vignette", "fond"])
+        self.assertEqual([a for a, _ in avd.reposes], ["fond", "vignette", "supervision", "fond"])
 
     def test_refusal_is_retried_after_an_hour(self):
         avd = ReposeAvd(refus=2)
         svc = self.service(avd)
         svc.tick()
         svc.tick()
-        self.assertEqual(len(avd.reposes), 2)
+        self.assertEqual(len(avd.reposes), 3)
         self.assertTrue(any("repose fond" in l and "impossible" in l for l in self.logs))
         self.now += timedelta(hours=1, minutes=1)
         svc.tick()
-        self.assertEqual([a for a, _ in avd.reposes], ["fond", "vignette", "fond", "vignette"])
+        self.assertEqual([a for a, _ in avd.reposes], ["fond", "vignette", "supervision", "fond", "vignette"])
         svc.tick()
-        self.assertEqual(len(avd.reposes), 4)
+        self.assertEqual(len(avd.reposes), 5)
 
     def test_versions_follow_script_contents(self):
         v = pilot.posed_versions()
-        self.assertEqual(set(v), {"fond", "vignette"})
+        self.assertEqual(set(v), {"fond", "vignette", "supervision"})
         self.assertTrue(all(re.fullmatch(r"[0-9a-f]{12}", x) for x in v.values()))
         self.assertIn(pilot.SURVEY_SCRIPT, pilot.POSED["fond"])
