@@ -546,6 +546,51 @@ bibliothèque :
   une décision manuelle : pensez à aligner `MESHCENTRAL_VERSION` du
   Dockerfile.
 
+## Mises à jour par étapes (Windows, pilotes, logiciels)
+
+Onglet Postes, Mises à jour d'AVDiagram (migration 0088). Action
+`mises_a_jour`, script `agent/majwin.ps1`, côté relais `pcm/majwin.py`.
+
+1. « Relever les mises à jour » sur le pilote (PN09 d'office) : ce que
+   Windows Update propose (correctifs, antivirus, pilotes dont la carte
+   graphique) et, pour chaque logiciel winget du catalogue, la version posée
+   et la disponible. Rien n'est installé. Les mises à jour de fonctionnalité
+   (24H2 vers 25H2) ne sont jamais proposées.
+2. On coche, puis « Essayer sur PN09 ». La liste est figée : identifiants
+   Windows Update, versions winget exactes (`winget upgrade --version`).
+3. Sur le poste, une tâche planifiée SYSTEM `PointeNoire-MiseAJour` crée un
+   point de restauration (si la protection du système est active), télécharge
+   et installe, puis redémarre avec 2 minutes de préavis si Windows le demande.
+   L'API Windows Update refuse d'installer depuis une session distante, et
+   l'agent MeshCentral ne fait qu'une commande à la fois : la tâche planifiée
+   laisse le poste libre. L'état est dans `ProgramData\PointeNoire\maj\etat.json`.
+4. Le relais suit l'installation jusqu'au redémarrage (2 h 45 au plus), puis
+   relève à nouveau le poste : le contrôle dit, mise à jour par mise à jour, si
+   Windows ne la propose plus et si winget a la bonne version.
+5. « Déployer sur le parc » recopie la liste du pilote sur chaque autre poste,
+   qui la reçoit à son allumage (7 jours). Même KB sous un autre identifiant :
+   reconnu. Correctif absent du poste (autre version de Windows, autre
+   matériel) : noté « pas proposée à ce poste ».
+
+Jamais en mode événement : le relais lit l'état du poste avant de lancer, la
+tâche planifiée le revérifie au départ, avant chaque logiciel et avant de
+redémarrer. Un poste refusé est « mis de côté » ; « Relancer les postes
+restants » le reprend après l'événement.
+
+Report derrière le pilote (« Garder le parc derrière le pilote ») : Windows
+installe seul ses correctifs, il ne doit pas devancer PN09. Windows Pro :
+stratégie locale `DeferQualityUpdatesPeriodInDays` à 7 et
+`ExcludeWUDriversInQualityUpdate`. Windows Famille (PN02, PN05, PN-UK), où ces
+stratégies ne s'appliquent pas : Windows Update en pause 8 jours, reposée
+chaque lundi à 05:00 (`PCM_DEFER_AT`, `off` pour couper). Le pilote n'a aucun
+report. L'installation lancée depuis AVDiagram lève report et pause le temps
+d'installer, puis les remet. Le choix du poste est gardé dans
+`ProgramData\PointeNoire\maj\report.json`.
+
+Pilote de carte graphique : Windows Update ne propose souvent pas la version
+NVIDIA Studio voulue pour vMix. Pour une version précise, déposer l'installeur
+dans Préparer, Logiciels à installer (argument silencieux NVIDIA : `-s -noreboot`).
+
 ## Nettoyage réversible (lot 6)
 
 L'action « Nettoyer » de la page Postes applique un profil de production, et

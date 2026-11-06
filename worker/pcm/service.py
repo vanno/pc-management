@@ -36,6 +36,7 @@ from datetime import datetime, timedelta, timezone, tzinfo
 from typing import Callable
 
 from . import inventory as inv
+from . import majwin
 from . import installers as ins
 from . import pilot
 from . import planning as plan
@@ -47,7 +48,12 @@ from .sync import process
 
 SOURCE = "pc-management"
 RESULT_MAX = 4000
-ACTIONS = ("inventaire", "logiciels", "alimentation", "reseau", "mode_evenement", "supervision", "envoi", "nettoyage", "diagnostic", "fond", "vignette", "message")
+ACTIONS = ("inventaire", "logiciels", "alimentation", "reseau", "mode_evenement", "supervision", "envoi", "nettoyage", "diagnostic", "fond", "vignette", "message", "mises_a_jour")
+
+# Les créneaux qui ne portent pas le nom de leur action : le report des
+# postes du parc derrière le pilote, reposé chaque semaine (la pause de
+# Windows Famille dure 8 jours).
+SCHEDULED = {"report": ("mises_a_jour", {"op": "report"})}
 
 
 def load_software(profile_path, installers_path, installers_dir, avd=None):
@@ -123,6 +129,8 @@ class Service:
         self.check_script: str | None = None
         # agent/fond-pose.ps1, de même (le mode événement le pose s'il manque).
         self.wallpaper_script: str | None = None
+        # agent/majwin.ps1, de même.
+        self.updates_script: str | None = None
         self.seen: list[dict] = []
         parallel = bool(getattr(mesh, "parallel", False))
         self.concurrency = max(1, concurrency or 4) if parallel else 1
@@ -236,15 +244,21 @@ class Service:
             self._do(task, by_tag)
 
     def _do(self, task: dict, by_tag: dict[str, Device]) -> None:
-        controle = None
+        controle = donnees = None
         try:
             ok, result, *rest = self.run_task(task, by_tag)
             controle = rest[0] if rest else None
+            donnees = rest[1] if len(rest) > 1 else None
         except (MeshError, AvdError) as exc:
             ok, result = False, _short(str(exc))
         except Exception as exc:  # une tâche ne fait pas tomber les autres
             ok, result = False, _short(f"Erreur inattendue de l'outil : {type(exc).__name__} : {exc}")
-        kept = self.avd.finish_task(task["id"], ok, result, controle) if controle else self.avd.finish_task(task["id"], ok, result)
+        if donnees is not None:
+            kept = self.avd.finish_task(task["id"], ok, result, controle, donnees=donnees)
+        elif controle:
+            kept = self.avd.finish_task(task["id"], ok, result, controle)
+        else:
+            kept = self.avd.finish_task(task["id"], ok, result)
         state = "fait" if ok else "échec"
         if controle:
             state += f", contrôle {controle['etat']}"
@@ -287,7 +301,8 @@ class Service:
                 continue
             tags = sorted(tag for tag, d in by_tag.items() if d.online)
             try:
-                res = self.avd.request_tasks(name, tags, {"planifie": True}) if tags else {"requested": 0, "busy": 0}
+                action, params = SCHEDULED.get(name, (name, {}))
+                res = self.avd.request_tasks(action, tags, {**params, "planifie": True}) if tags else {"requested": 0, "busy": 0}
             except AvdError as exc:
                 # Une seule tentative par créneau : pas de rafale au journal ni sur l'API.
                 self._plan_failed[name] = at
@@ -397,6 +412,8 @@ class Service:
             return ok, _short(text)
         if action == "logiciels":
             return self.install_profile(device, tag, scheduled=scheduled)
+        if action == "mises_a_jour":
+            return self.updates(device, params)
         return self.inventory(device, tag)
 
     def _event_refusal(self, device: Device) -> str | None:
@@ -430,6 +447,30 @@ class Service:
         inv_ok, inv_text = self.inventory(device, tag)
         text += ". Fiche à jour" if inv_ok else f". Inventaire après installation impossible : {inv_text}"
         return all(o.ok for o in outcomes), _short(text)
+
+    def _software_ids(self) -> list[str]:
+        try:
+            packages, _ = load_software(self.profile_path, self.installers_path, self.installers_dir, self.avd)
+        except (sw.SoftwareError, ins.InstallerError, AvdError) as exc:
+            self.log(f"catalogue de logiciels illisible pour les mises à jour : {exc}")
+            return []
+        return [p.id for p in packages]
+
+    def updates(self, device: Device, params: dict) -> tuple:
+        """Mises à jour par étapes (majwin) : le relevé, ou l'installation
+        d'une liste approuvée, jamais en mode événement."""
+        if params.get("op") == "report":
+            ok, text, controle = majwin.defer(self.mesh, device.id, params, inv.new_nonce, script=self.updates_script)
+            return (ok, _short(text), controle) if controle else (ok, _short(text))
+        ids = self._software_ids()
+        if params.get("op") == "releve":
+            ok, text, data = majwin.survey(self.mesh, device.id, ids, inv.new_nonce, script=self.updates_script)
+            return ok, _short(text), None, data
+        refused = self._event_refusal(device)
+        if refused:
+            return False, refused.replace("une installation", "des mises à jour"), None, {"reporte": "mode_evenement"}
+        ok, text, controle, data = majwin.apply(self.mesh, device.id, params, ids, inv.new_nonce, sleep=self.sleep, script=self.updates_script)
+        return ok, _short(text), controle, data
 
     def _logged(self, tag: str, label: str, outcome: sw.Outcome) -> sw.Outcome:
         self.log(f"{tag} {label} : {sw.LABELS[outcome.state]}{' : ' + outcome.detail if outcome.detail else ''}")

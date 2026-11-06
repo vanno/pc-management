@@ -147,13 +147,16 @@ class AvdClient:
         Le fichier porte une adresse de téléchargement signée."""
         return self._request("GET", f"/api/v1/postes/envois/{envoi_id}")
 
-    def finish_task(self, task_id: str, ok: bool, result: str, controle: dict | None = None) -> bool:
+    def finish_task(self, task_id: str, ok: bool, result: str, controle: dict | None = None, donnees: dict | None = None) -> bool:
         """Rend le résultat d'une tâche, et ce que le contrôle a relu dans
         Windows (pilot.verdict). False si AVDiagram ne l'attend plus (annulée,
         ou expirée après 30 minutes)."""
         body: dict = {"status": "done" if ok else "failed", "result": result[:4000]}
         if controle is not None:
             body["controle"] = controle
+        # Le relevé des mises à jour (0088) : AVDiagram sans la migration l'ignore.
+        if donnees is not None:
+            body["donnees"] = donnees
         try:
             self._request("POST", f"/api/v1/postes/taches/{task_id}", body)
             return True

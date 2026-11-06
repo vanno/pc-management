@@ -162,6 +162,7 @@ def cmd_serve(args, mesh: MeshCtrl) -> int:
     schedules = {
         "inventaire": plan.parse_slot(os.environ.get("PCM_INVENTORY_AT", "03:00")),
         "logiciels": plan.parse_slot(os.environ.get("PCM_UPDATE_AT", "dim 04:00")),
+        "report": plan.parse_slot(os.environ.get("PCM_DEFER_AT", "lun 05:00")),
     }
     service = Service(
         mesh,
