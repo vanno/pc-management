@@ -42,7 +42,7 @@ def process(
     """
     hostname = (data.get("system") or {}).get("hostname") or ""
     previous = store.latest(tag)
-    store.save(tag, device.id, data)
+    store.save(tag, device.id, inv.carry_over(data, previous))
     summ = inv.summary(data)
     changes = inv.diff(previous, data)
     out = Outcome(entry={"poste": tag, "meshcentral": device.name, **summ})
@@ -72,7 +72,7 @@ def process(
         # Un AVDiagram sans l'outil (avant la migration 0069) ne doit pas faire
         # échouer le passage : c'est un plus.
         try:
-            avd.set_inventory(unit.asset_tag, inv.avd_payload(data, changes))
+            avd.set_inventory(unit.asset_tag, inv.avd_payload(data, changes, previous=previous))
             out.entry["avdiagram_inventaire"] = True
             out.details_sent = True
         except AvdError as exc:

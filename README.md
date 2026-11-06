@@ -27,6 +27,25 @@ synchronisé sur sa fiche du parc AVDiagram.
    0069 : avant, le rapport le signale en alerte et le reste du passage se fait.
    `--no-details` désactive cet envoi.
 
+   Depuis le schéma 2 de `agent/inventory.ps1`, l'inventaire porte aussi la
+   santé de chaque disque (`Get-PhysicalDisk`, `Get-StorageReliabilityCounter` :
+   état Windows, usure en %, température, heures sous tension, erreurs non
+   corrigées, alerte SMART `MSStorageDriver_FailurePredictStatus`), les cycles
+   et capacités de la batterie (`BatteryCycleCount`, `BatteryStaticData`,
+   `BatteryFullChargedCapacity`), la licence Windows (`SoftwareLicensingProduct` :
+   activée ou non, canal OEM, Retail ou Volume, les 5 derniers caractères de
+   la clé, jamais la clé) et l'édition de vMix, lue par son API locale
+   (`http://127.0.0.1:8088/api`) quand vMix est ouvert. vMix fermé, l'édition
+   vue la dernière fois est gardée avec sa date. Les heures sous tension du
+   disque système servent de compteur d'utilisation du poste. AVDiagram en
+   garde un point par jour (migration 0088) pour prévoir l'usure.
+
+   Inventaire à l'allumage : un poste qui apparaît en ligne dans MeshCentral
+   reçoit une tâche « Inventaire à l'allumage », au plus une fois toutes les
+   deux heures par poste. Elle est ignorée, sans échec, si le poste est en
+   mode événement, comme l'inventaire de la nuit. Un clic sur « Faire
+   l'inventaire » passe toujours.
+
 6. `pcm serve` tourne en service (`pcm-service` dans `docker-compose.yml`).
    Toutes les 30 secondes, il envoie à AVDiagram la liste des postes vus par
    MeshCentral (`POST /api/v1/postes/battement`) et repart avec au plus une
