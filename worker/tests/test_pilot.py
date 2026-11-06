@@ -214,6 +214,16 @@ class SupervisionTests(unittest.TestCase):
         cmd = pilot.build_command(request, "ab12")
         self.assertLess(len(cmd), 24_000)
 
+    def test_probe_frees_a_stuck_meshcentral_command(self):
+        # MeshCentral ne lance qu'une commande à la fois par poste : la sonde
+        # ferme celle de l'agent restée ouverte plus de 90 minutes, jamais le terminal.
+        probe = pilot.PROBE_SCRIPT.read_text(encoding="utf-8-sig")
+        guard = probe[probe.index("Win32_Service"): probe.rindex("debloque.log")]
+        self.assertIn("ParentProcessId", guard)
+        self.assertIn("-noprofile -nologo -command -", guard)
+        self.assertIn("AddMinutes(-90)", guard)
+        self.assertLess(probe.rindex("debloque.log"), probe.index("$avant = Get-Compteurs"))
+
     def test_remove(self):
         mesh = FakeMesh({"supervision": [{"ok": True, "detail": "sonde retirée"}]})
         avd = FakeAvd()

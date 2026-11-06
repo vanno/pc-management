@@ -127,7 +127,12 @@ class MeshPipe:
                 self._send({"cancel": rid})
             except (OSError, ValueError):
                 pass
-            raise MeshError(f"runcommand : délai dépassé ({timeout:g} s)")
+            # MeshCentral ne lance qu'une commande à la fois par poste, sans
+            # limite de durée : une commande restée ouverte bloque les suivantes.
+            raise MeshError(
+                f"runcommand : délai dépassé ({timeout:g} s). Poste en veille, ou une commande précédente encore ouverte"
+                " (MeshCentral n'en lance qu'une à la fois) : la sonde de supervision la ferme après 90 minutes, un redémarrage aussi"
+            )
         reply = slot["reply"] or {}
         if "error" in reply:
             raise MeshError(f"runcommand : {reply['error']}")
