@@ -233,6 +233,23 @@ class SupervisionTests(unittest.TestCase):
         probe = pilot.PROBE_SCRIPT.read_text(encoding="utf-8-sig")
         self.assertIn("if ($code -eq 401 -and $jeton -eq $conf.jeton) { Disable-ScheduledTask", probe)
 
+    def test_check_waits_for_the_first_probe_run(self):
+        # PN09 et PN-UK, 06/11 : le contrôle s'arrêtait à 45 secondes, la sonde
+        # tournait encore (267009, SCHED_S_TASK_RUNNING), échec à tort.
+        pilote = pilot.AGENT_SCRIPT.read_text(encoding="utf-8-sig")
+        probe = pilot.PROBE_SCRIPT.read_text(encoding="utf-8-sig")
+        controle = pilot.CHECK_SCRIPT.read_text(encoding="utf-8")
+        install = pilote[pilote.index("function Install-Sonde"): pilote.index("function Remove-Sonde")]
+        premier = int(re.search(r"-Once -At \(Get-Date\)\.AddSeconds\((\d+)\)", install).group(1))
+        mesure = int(re.search(r"\$debut\.AddSeconds\((\d+) \* \$k\)", probe).group(1))
+        mesures = len(re.search(r"foreach \(\$k in ([\d, ]+)\)", probe).group(1).split(","))
+        envoi = int(re.search(r"-TimeoutSec (\d+)", probe).group(1))
+        test = controle[controle.index("function Test-Supervision"): controle.index("function Update-Historique")]
+        attente = int(re.search(r"\$attente = (\d+)", test).group(1))
+        self.assertGreater(attente, premier + mesure * mesures + envoi)
+        self.assertLess(attente + 30, pilot.CHECK_TIMEOUT)
+        self.assertLess(test.index("267009"), test.index("$info.LastTaskResult -ne 0"))
+
     def test_remove(self):
         mesh = FakeMesh({"supervision": [{"ok": True, "detail": "sonde retirée"}]})
         avd = FakeAvd()
