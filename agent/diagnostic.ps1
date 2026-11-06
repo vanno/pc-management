@@ -6,7 +6,9 @@
 
   Rien n'est changé sur le poste. Paramètres : debit (mesure du débit
   internet, environ 30 s), scan (ping du réseau local, préfixe /22 au plus
-  large), cibles ([{ hote, port }], ports TCP à tester en plus).
+  large), cibles ([{ hote, port }], ports TCP à tester en plus), sortie
+  ({ protocole rtmp|rtmps|srt, hote, port } : test de sortie avant le direct,
+  sans clé de stream).
 #>
 
 $ErrorActionPreference = 'Stop'
@@ -121,6 +123,145 @@ function Get-Voisins($Carte) {
     @($vus | Select-Object -First 254 | ForEach-Object { [ordered]@{ ip = $_; mac = $macs[$_] } })
 }
 
+# --- Test de sortie avant le direct -------------------------------------------
+# Latence, gigue et perte vers le vrai point d'entrée de la plateforme, sans
+# clé de stream et sans rien diffuser : RTMP et RTMPS par la poignée de main
+# RTMP (C0+C1 envoyés, S0+S1 attendus, puis on ferme), SRT par la demande
+# d'induction du protocole (paquet UDP de 64 octets, réponse attendue du
+# même identifiant). Chaque essai qui ne répond pas compte comme perdu.
+function Get-Stats([double[]]$Ms, [int]$Essais) {
+    $r = [ordered]@{ essais = $Essais; reussis = $Ms.Count; perte = [Math]::Round(100 * ($Essais - $Ms.Count) / [Math]::Max(1, $Essais), 1); ms_min = $null; ms_moy = $null; ms_max = $null; gigue = $null }
+    if ($Ms.Count) {
+        $r.ms_min = [Math]::Round(($Ms | Measure-Object -Minimum).Minimum, 1)
+        $r.ms_max = [Math]::Round(($Ms | Measure-Object -Maximum).Maximum, 1)
+        $moy = ($Ms | Measure-Object -Average).Average
+        $r.ms_moy = [Math]::Round($moy, 1)
+        if ($Ms.Count -gt 1) {
+            $e = 0.0
+            for ($i = 1; $i -lt $Ms.Count; $i++) { $e += [Math]::Abs($Ms[$i] - $Ms[$i - 1]) }
+            $r.gigue = [Math]::Round($e / ($Ms.Count - 1), 1)
+        }
+    }
+    $r
+}
+function Read-Octets($Flux, [int]$N) {
+    $o = New-Object byte[] $N
+    $lu = 0
+    while ($lu -lt $N) {
+        $k = $Flux.Read($o, $lu, $N - $lu)
+        if ($k -le 0) { throw 'fermé par la plateforme' }
+        $lu += $k
+    }
+    $o
+}
+function Test-Rtmp([string]$Hote, [int]$Port, [bool]$Tls, [int]$Essais) {
+    $ms = @(); $tcp = @(); $erreur = $null
+    for ($i = 0; $i -lt $Essais; $i++) {
+        if ($i) { Start-Sleep -Milliseconds 200 }
+        $c = New-Object System.Net.Sockets.TcpClient
+        try {
+            $t = [Diagnostics.Stopwatch]::StartNew()
+            $a = $c.BeginConnect($Hote, $Port, $null, $null)
+            if (-not $a.AsyncWaitHandle.WaitOne(3000)) { throw 'délai dépassé' }
+            $c.EndConnect($a)
+            $tcp += $t.Elapsed.TotalMilliseconds
+            $f = $c.GetStream()
+            $f.ReadTimeout = 3000; $f.WriteTimeout = 3000
+            if ($Tls) {
+                $ssl = New-Object System.Net.Security.SslStream($f, $false)
+                $ssl.ReadTimeout = 3000; $ssl.WriteTimeout = 3000
+                $ssl.AuthenticateAsClient($Hote)
+                $f = $ssl
+            }
+            # C0 (version 3) et C1 : 4 octets d'heure, 4 à zéro, 1528 au hasard.
+            $c1 = New-Object byte[] 1537
+            (New-Object Random).NextBytes($c1)
+            $c1[0] = 3
+            for ($k = 1; $k -le 8; $k++) { $c1[$k] = 0 }
+            $t = [Diagnostics.Stopwatch]::StartNew()
+            $f.Write($c1, 0, $c1.Length)
+            $f.Flush()
+            $s = Read-Octets $f 1537
+            $ms += $t.Elapsed.TotalMilliseconds
+            if ($s[0] -ne 3) { $erreur = "réponse inattendue (version $($s[0]))" }
+            # C2 (S1 renvoyé) puis S2 : la poignée de main se termine proprement, rien n'est publié.
+            $f.Write($s, 1, 1536)
+            $f.Flush()
+            try { [void](Read-Octets $f 1536) } catch { }
+        } catch {
+            $m = $_.Exception.InnerException
+            if (-not $m) { $m = $_.Exception }
+            $erreur = ([string]$m.Message).Substring(0, [Math]::Min(120, ([string]$m.Message).Length))
+        } finally { $c.Close() }
+    }
+    $r = Get-Stats $ms $Essais
+    $r.connexion_ms = $(if ($tcp.Count) { [Math]::Round(($tcp | Measure-Object -Average).Average, 1) } else { $null })
+    $r.detail = $erreur
+    $r
+}
+function Test-Srt([string]$Hote, [int]$Port, [int]$Essais) {
+    $ip = $null
+    try { $ip = @([Net.Dns]::GetHostAddresses($Hote) | Where-Object { $_.AddressFamily -eq 'InterNetwork' })[0] } catch { }
+    if (-not $ip) { $r = Get-Stats @() $Essais; $r.detail = 'nom introuvable'; return $r }
+    $u = New-Object System.Net.Sockets.UdpClient(0)
+    $u.Client.ReceiveTimeout = 1000
+    $ms = @(); $erreur = $null
+    $hasard = New-Object Random
+    try {
+        $u.Connect($ip, $Port)
+        for ($i = 0; $i -lt $Essais; $i++) {
+            if ($i) { Start-Sleep -Milliseconds 100 }
+            $id = $hasard.Next(1, [int]::MaxValue)
+            $p = New-Object byte[] 64
+            # En-tête de contrôle : drapeau 1, type 0 (poignée de main), socket destinataire 0.
+            $p[0] = 0x80
+            # Corps : version 4, champ d'extension 2, numéro de séquence, MTU,
+            # fenêtre, type 1 (induction), notre identifiant, pas de témoin.
+            foreach ($champ in @(@(16, 4), @(20, 2), @(24, $hasard.Next(1, 0x7FFFFFFF)), @(28, 1500), @(32, 8192), @(36, 1), @(40, $id))) {
+                $b = [BitConverter]::GetBytes([int]$champ[1])
+                [Array]::Reverse($b)
+                [Array]::Copy($b, 0, $p, $champ[0], 4)
+            }
+            [Array]::Copy($ip.GetAddressBytes(), 0, $p, 48, 4)
+            $t = [Diagnostics.Stopwatch]::StartNew()
+            [void]$u.Send($p, $p.Length)
+            $fin = (Get-Date).AddMilliseconds(1000)
+            while ((Get-Date) -lt $fin) {
+                try {
+                    $de = New-Object System.Net.IPEndPoint([Net.IPAddress]::Any, 0)
+                    $q = $u.Receive([ref]$de)
+                } catch { break }
+                if ($q.Length -ge 64 -and $q[0] -eq 0x80 -and $q[1] -eq 0) {
+                    $dest = [BitConverter]::ToInt32([byte[]]@($q[15], $q[14], $q[13], $q[12]), 0)
+                    if ($dest -eq $id) { $ms += $t.Elapsed.TotalMilliseconds; break }
+                }
+            }
+        }
+    } catch {
+        $erreur = ([string]$_.Exception.Message).Substring(0, [Math]::Min(120, ([string]$_.Exception.Message).Length))
+    } finally { $u.Close() }
+    $r = Get-Stats $ms $Essais
+    if (-not $ms.Count -and -not $erreur) { $erreur = 'aucune réponse SRT (port fermé, pare-feu, ou pas d''écoute SRT en mode listener)' }
+    $r.detail = $erreur
+    $r
+}
+function Measure-Sortie($S) {
+    $proto = [string]$S.protocole
+    $hote = [string]$S.hote
+    $port = [int]$S.port
+    $r = [ordered]@{ protocole = $proto; hote = $hote; port = $port; ip = $null; prevu_mbps = $(if ($S.prevu_mbps) { [double]$S.prevu_mbps } else { $null }) }
+    try { $r.ip = @([Net.Dns]::GetHostAddresses($hote) | Where-Object { $_.AddressFamily -eq 'InterNetwork' } | ForEach-Object { $_.ToString() })[0] } catch { }
+    $m = if ($proto -eq 'srt') { Test-Srt $hote $port 20 } else { Test-Rtmp $hote $port ($proto -eq 'rtmps') 10 }
+    foreach ($k in $m.Keys) { $r[$k] = $m[$k] }
+    # La route : ping ICMP en plus, souvent refusé par les plateformes.
+    try {
+        $ping = New-Object System.Net.NetworkInformation.Ping
+        $ok = 0
+        for ($i = 0; $i -lt 4; $i++) { if ($ping.Send($hote, 1000).Status -eq 'Success') { $ok++ } }
+        $r.ping_perte = [double](100 * (4 - $ok) / 4)
+    } catch { $r.ping_perte = $null }
+    $r
+}
 function Invoke-Diagnostic($p) {
     $d = [ordered]@{ le = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ'); poste = $env:COMPUTERNAME }
     $d.cartes = @(Get-NetAdapter -Physical -ErrorAction SilentlyContinue | Sort-Object Name | ForEach-Object {
@@ -151,6 +292,7 @@ function Invoke-Diagnostic($p) {
     $d.ecoute = @(@(Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | Where-Object { $_.LocalAddress -notlike '127.*' -and $_.LocalAddress -ne '::1' } | ForEach-Object { [ordered]@{ proto = 'tcp'; port = [int]$_.LocalPort; processus = $noms[[int]$_.OwningProcess] } }) +
                   @(Get-NetUDPEndpoint -ErrorAction SilentlyContinue | Where-Object { $_.LocalAddress -notlike '127.*' -and $_.LocalAddress -ne '::1' } | ForEach-Object { [ordered]@{ proto = 'udp'; port = [int]$_.LocalPort; processus = $noms[[int]$_.OwningProcess] } }) |
                   Sort-Object proto, port -Unique | Select-Object -First 120)
+    if ($p.sortie -and $p.sortie.hote -and $p.sortie.port -and [string]$p.sortie.protocole -in 'rtmp', 'rtmps', 'srt') { $d.sortie = Measure-Sortie $p.sortie }
     if ($p.debit) { $d.debit = Measure-Debit }
     if ($p.scan) {
         $principale = @($d.cartes | Where-Object { $_.passerelle -and @($_.adresses).Count }) | Select-Object -First 1
@@ -165,6 +307,10 @@ function Invoke-Diagnostic($p) {
     $ko = @($d.ports | Where-Object { -not $_.ok }).Count
     $txt += " ; ports : $(@($d.ports).Count - $ko)/$(@($d.ports).Count) joignables"
     if ($d.Contains('debit') -and $d.debit.descendant_mbps) { $txt += " ; débit $($d.debit.descendant_mbps) Mb/s ↓ $($d.debit.montant_mbps) Mb/s ↑" }
+    if ($d.Contains('sortie')) {
+        $o = $d.sortie
+        $txt += " ; sortie $($o.protocole) $($o.hote) : " + $(if ($o.reussis) { "$($o.ms_moy) ms, perte $($o.perte) %" } else { "injoignable ($($o.detail))" })
+    }
     if ($d.Contains('voisins')) { $txt += " ; $(@($d.voisins).Count) appareils sur le réseau local" }
     $result.detail = $txt
 }

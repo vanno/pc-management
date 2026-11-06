@@ -68,6 +68,15 @@ class CommandTests(unittest.TestCase):
         cmd = pilot.build_command({"op": "diagnostic"}, "ab12", script=pilot.DIAGNOSTIC_SCRIPT.read_text(encoding="utf-8"))
         self.assertLess(len(cmd), 16_000)
 
+    def test_output_test_keeps_only_the_ingest_point(self):
+        mesh = FakeMesh({"diagnostic": [{"ok": True, "detail": "x", "diagnostic": {"le": "2026"}}]})
+        pilot.diagnostic(mesh, "n", {"debit": True, "prevu_mbps": 8, "sortie": {"protocole": "rtmp", "hote": "a.rtmp.youtube.com", "port": 1935, "cle": "secret"}}, nonces(), script="'x'")
+        self.assertEqual(mesh.calls[0][0]["sortie"], {"protocole": "rtmp", "hote": "a.rtmp.youtube.com", "port": 1935, "prevu_mbps": 8})
+        for bad in ({"protocole": "http", "hote": "x", "port": 80}, {"protocole": "srt", "hote": "a b", "port": 9000}, {"protocole": "srt", "hote": "x", "port": 0}):
+            mesh = FakeMesh({"diagnostic": [{"ok": True, "detail": "x"}]})
+            pilot.diagnostic(mesh, "n", {"sortie": bad}, nonces(), script="'x'")
+            self.assertNotIn("sortie", mesh.calls[0][0])
+
     def test_wallpaper_installer_and_script_stay_under_the_agent_limit(self):
         for installer, path, op in ((pilot.SURVEY_INSTALLER, pilot.SURVEY_SCRIPT, "releve"), (pilot.WALLPAPER_INSTALLER, pilot.WALLPAPER_SCRIPT, "fond")):
             cmd = pilot.build_command({"op": op, "actif": True, "reference": "PN-UK"}, "ab12", script=pilot.with_wallpaper(installer.read_text(encoding="utf-8"), path))
@@ -202,11 +211,11 @@ class FakeAvd:
 
 class SupervisionTests(unittest.TestCase):
     def test_install_sends_token_and_compressed_probe(self):
-        mesh = FakeMesh({"supervision": [{"ok": True, "detail": "sonde installée : premières mesures dans la minute"}]})
+        mesh = FakeMesh({"supervision": [{"ok": True, "detail": "sonde installée : premières mesures dans la minute"}], "console": [{"ok": True, "detail": "aucune console régie, lecture de vMix posée"}]})
         avd = FakeAvd()
         ok, text = pilot.supervision(mesh, "node//pn01", "u1", {"actif": True}, avd, nonces())
         self.assertTrue(ok)
-        self.assertEqual(text, "Sonde installée : premières mesures dans la minute")
+        self.assertEqual(text, "Sonde installée : premières mesures dans la minute. Aucune console régie, lecture de vMix posée")
         request = mesh.calls[0][0]
         self.assertEqual((request["url"], request["jeton"]), ("https://avd.example/api/v1/postes/mesures", "pns_" + "a" * 43))
         sent = gzip.decompress(base64.b64decode(request["script"])).decode("utf-8")

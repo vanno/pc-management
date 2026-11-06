@@ -4,6 +4,7 @@ calculés à partir des dernières mesures. Fonctions pures, sans réseau."""
 from __future__ import annotations
 
 import ipaddress
+from datetime import datetime
 import re
 
 # La sonde envoie une mesure toutes les 30 secondes : trois manquées, le poste
@@ -23,6 +24,58 @@ def _n(v):
 
 def cartes(mesure: dict) -> list[dict]:
     return [c for c in mesure.get("nics") or [] if isinstance(c, dict)]
+
+
+# Un stream qui envoie moins que ça n'envoie rien d'utile.
+SEUIL_STREAM_BPS = 300_000
+
+
+def vmix(mesure: dict) -> dict | None:
+    v = mesure.get("vmix")
+    return v if isinstance(v, dict) else None
+
+
+def etiquette_vmix(v: dict | None) -> str:
+    """LIVE, REC, LIVE REC, PRÊT, MUET (vMix lancé, API muette), FERMÉ, ou vide sans vMix."""
+    if not v:
+        return ""
+    if v.get("running") is False:
+        return "FERMÉ"
+    if not v.get("ok"):
+        return "MUET"
+    morceaux = [m for m, actif in (("LIVE", v.get("streaming")), ("REC", v.get("recording"))) if actif is True]
+    return " ".join(morceaux) or "PRÊT"
+
+
+def heure_locale(iso: str) -> str:
+    try:
+        return datetime.fromisoformat(iso.replace("Z", "+00:00")).astimezone().strftime("%H:%M")
+    except ValueError:
+        return iso[11:16]
+
+
+def alertes_vmix(mesure: dict) -> list[str]:
+    v = vmix(mesure)
+    if not v:
+        return []
+    out = []
+    if v.get("running") is False:
+        out.append("vMix fermé")
+    elif not v.get("ok"):
+        out.append("vMix ne répond pas (Web Controller ?)")
+    if v.get("streaming") is True:
+        tx = sum(_n(c.get("tx")) or 0 for c in cartes(mesure) if not c.get("down"))
+        if tx < SEUIL_STREAM_BPS:
+            out.append("Stream vMix actif mais rien ne sort")
+        coupes = [i + 1 for i, c in enumerate(v.get("channels") or []) if c is False]
+        if coupes and len(v.get("channels") or []) > 1:
+            out.append("Destination " + ", ".join(map(str, coupes)) + " coupée")
+    elif isinstance(v.get("stopped_at"), str):
+        out.append(f"Stream vMix arrêté à {heure_locale(v['stopped_at'])}")
+    perdues = _n(v.get("dropped_new"))
+    if perdues:
+        out.append(f"vMix : {perdues:.0f} images perdues")
+    return out
 
 
 def alertes(mesure: dict) -> list[str]:
@@ -47,6 +100,7 @@ def alertes(mesure: dict) -> list[str]:
             out.append(f"Câble débranché sur {nom}")
         elif (_n(c.get("errors")) or 0) > 0:
             out.append(f"Erreurs réseau sur {nom}")
+    out.extend(alertes_vmix(mesure))
     return out
 
 
@@ -77,6 +131,8 @@ def etat_poste(p: dict, maintenant: float) -> dict:
         "cartes": cartes(m),
         "adresse": p.get("adresse"),
         "console_ip": p.get("console_ip"),
+        "vmix": etiquette_vmix(vmix(m)) if age <= EN_LIGNE_S else "",
+        "vmix_detail": vmix(m) if age <= EN_LIGNE_S else None,
     }
 
 
@@ -130,7 +186,7 @@ def texte_court(e: dict) -> str:
         return "Hors ligne"
     if e["alertes"]:
         return e["alertes"][0]
-    morceaux = []
+    morceaux = [e["vmix"]] if e.get("vmix") in ("LIVE", "REC", "LIVE REC") else []
     if e["cpu"] is not None:
         morceaux.append(f"CPU {e['cpu']:.0f}%")
     if e["passerelle_ms"] is not None:
@@ -140,7 +196,8 @@ def texte_court(e: dict) -> str:
 
 def variables_companion(etats: list[dict]) -> dict[str, str]:
     """Les variables personnalisées poussées dans Companion : un résumé, et
-    pour chaque poste son état (OK, ALERTE, HORS LIGNE) et une ligne courte."""
+    pour chaque poste son état (OK, ALERTE, HORS LIGNE), une ligne courte et
+    l'état de vMix (LIVE, REC, LIVE REC, PRÊT, MUET, FERMÉ, vide sans vMix)."""
     compte = {k: 0 for k in ETIQUETTES}
     v: dict[str, str] = {}
     for e in etats:
@@ -149,10 +206,12 @@ def variables_companion(etats: list[dict]) -> dict[str, str]:
         v[f"{base}_etat"] = e["etiquette"]
         v[f"{base}_texte"] = texte_court(e)
         v[f"{base}_cpu"] = "" if e["cpu"] is None else str(round(e["cpu"]))
+        v[f"{base}_vmix"] = e.get("vmix") or ""
     total = len(etats)
     v["pn_resume"] = f"{compte['ok']}/{total} OK" if total else "Aucun poste"
     v["pn_alertes"] = str(compte["alerte"])
     v["pn_hors_ligne"] = str(compte["hors_ligne"])
+    v["pn_live"] = str(sum(1 for e in etats if "LIVE" in (e.get("vmix") or "")))
     v["pn_etat"] = "HORS LIGNE" if not total or compte["hors_ligne"] == total else ("ALERTE" if compte["alerte"] or compte["hors_ligne"] else "OK")
     return v
 
