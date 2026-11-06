@@ -65,8 +65,8 @@ try {
         $l.Prefixes.Add('http://127.0.0.1:8088/')
         $l.Start()
         Set-Content -Path $Pret -Value 1
-        # Une seule lecture attendue : la tâche finit d'elle-même.
-        for ($i = 0; $i -lt 1; $i++) {
+        # Deux lectures attendues (la sonde d'essai, puis vmix.ps1) : la tâche finit d'elle-même.
+        for ($i = 0; $i -lt 2; $i++) {
             $c = $l.GetContext()
             $b = [Text.Encoding]::UTF8.GetBytes($Xml)
             $c.Response.ContentType = 'text/xml'
@@ -76,6 +76,14 @@ try {
         $l.Stop()
     }
     Wait-Pret $pret $http
+    # Une première lecture sans limite serrée : dit si l'écoute répond, et en combien de temps.
+    $t0 = [Diagnostics.Stopwatch]::StartNew()
+    try {
+        $q = [Net.HttpWebRequest][Net.WebRequest]::Create('http://127.0.0.1:8088/api')
+        $q.Proxy = $null; $q.Timeout = 15000
+        $rep = $q.GetResponse(); $rep.Close()
+        Write-Host "       faux vMix HTTP : réponse en $($t0.ElapsedMilliseconds) ms"
+    } catch { Write-Host "       faux vMix HTTP : $($_.Exception.InnerException.Message) $($_.Exception.Message) après $($t0.ElapsedMilliseconds) ms" }
     $v = & $vmix
     Test-Point 'lecture par le port 8088' ($v.ok -and $v.source -eq 'http' -and $v.streaming -and $v.recording -and $v.recording_s -eq 125 -and $v.inputs -eq 1 -and $v.version -eq '27.0.0.49') ($v | ConvertTo-Json -Compress)
     Test-Point 'destinations du stream' (@($v.channels).Count -eq 2 -and $v.channels[0] -eq $true -and $v.channels[1] -eq $false) ($v.channels | ConvertTo-Json -Compress)
