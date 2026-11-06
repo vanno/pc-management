@@ -462,6 +462,7 @@ montre le poste allégé avec la désinstallation en échec.
 | Services | DiagTrack, dmwappushservice, MapsBroker, RetailDemo, XblAuthManager, XblGameSave, XboxNetApiSvc, Fax, lfsvc désactivés | type de démarrage d'avant |
 | Tâches | collecte de compatibilité, programme d'amélioration, retours, cartes, diagnostic disque | réactivées si elles l'étaient |
 | Réglages | télémétrie au minimum, enregistrement de jeu, applications suggérées, publicité, Cortana, widgets, démarrage rapide coupés | valeurs d'avant, ou supprimées |
+| Widgets | réglage `AllowNewsAndInterests` à 0 ; si le pilote UCPD de Windows 11 le refuse, il passe par la stratégie de groupe locale (Registry.pol écrit par le relais, `gpupdate /target:computer`), aussi sur Windows Famille sans gpedit ; si Windows ignore la stratégie, le paquet des widgets (`MicrosoftWindows.Client.WebExperience`) est retiré | entrée retirée de la stratégie locale ; paquet non réinstallé |
 | Applications (option) | Actualités, Météo, Xbox, Solitaire, Contacts, Hub de commentaires, Clipchamp, Candy Crush… retirées pour tous les comptes | **non réinstallées** : la liste est rendue, à réinstaller depuis le Microsoft Store |
 
 Rien ne touche à Defender, au pare-feu, à Windows Update, à la recherche, aux

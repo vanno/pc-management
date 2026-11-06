@@ -46,6 +46,8 @@ MARKER = "PNPL1:"
 AGENT_SCRIPT = Path(__file__).resolve().parents[2] / "agent" / "pilote.ps1"
 PROBE_SCRIPT = Path(__file__).resolve().parents[2] / "agent" / "supervision.ps1"
 DIAGNOSTIC_SCRIPT = Path(__file__).resolve().parents[2] / "agent" / "diagnostic.ps1"
+# La stratégie de groupe locale de l'allègement, envoyée devant pilote.ps1.
+POLICY_SCRIPT = Path(__file__).resolve().parents[2] / "agent" / "politique.ps1"
 WALLPAPER_SCRIPT = Path(__file__).resolve().parents[2] / "agent" / "fond.ps1"
 WALLPAPER_INSTALLER = Path(__file__).resolve().parents[2] / "agent" / "fond-pose.ps1"
 SURVEY_SCRIPT = Path(__file__).resolve().parents[2] / "agent" / "releve.ps1"
@@ -283,6 +285,14 @@ def event_mode(
 CLEANUP_TIMEOUT = 600
 
 
+def with_policy(script: str | None = None) -> str:
+    """pilote.ps1 précédé de politique.ps1 : les widgets coupés par la
+    stratégie de groupe locale quand UCPD refuse leur réglage."""
+    if script is None:
+        script = AGENT_SCRIPT.read_text(encoding="utf-8")
+    return POLICY_SCRIPT.read_text(encoding="utf-8") + "\n" + script
+
+
 def cleanup(mesh: MeshCtrl, device_id: str, params: dict, new_nonce: Callable[[], str], script: str | None = None) -> tuple[bool, str] | tuple[bool, str, bool]:
     """Le profil de nettoyage. L'état d'avant reste sur le poste, qui sait l'annuler.
     Un troisième élément vrai : en échec, mais l'allègement est posé (Windows
@@ -292,7 +302,7 @@ def cleanup(mesh: MeshCtrl, device_id: str, params: dict, new_nonce: Callable[[]
     body = {"op": "nettoyage", "actif": params["actif"], "applications": params.get("applications") is True}
     try:
         # Retirer des applications pour tous les comptes prend plusieurs minutes.
-        reply = call(mesh, device_id, body, new_nonce, timeout=CLEANUP_TIMEOUT, script=script)
+        reply = call(mesh, device_id, body, new_nonce, timeout=CLEANUP_TIMEOUT, script=with_policy(script))
     except (MeshError, PilotError) as exc:
         return False, str(exc)
     detail = reply.get("detail") or ""
@@ -655,6 +665,7 @@ def slim_fingerprints() -> dict[str, str]:
     sent = {p.name: p.read_text(encoding="utf-8-sig") for p in sorted(agent.glob("*.ps1"))}
     sent["releve-pose.ps1+releve.ps1"] = with_wallpaper(SURVEY_INSTALLER.read_text(encoding="utf-8"), SURVEY_SCRIPT)
     sent["fond-pose.ps1+fond.ps1"] = with_wallpaper(WALLPAPER_INSTALLER.read_text(encoding="utf-8"), WALLPAPER_SCRIPT)
+    sent["politique.ps1+pilote.ps1"] = with_policy()
     return {name: hashlib.sha256(slim(text).encode("utf-8")).hexdigest()[:12] for name, text in sent.items()}
 
 

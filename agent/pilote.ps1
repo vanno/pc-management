@@ -648,7 +648,7 @@ function Set-PlanProduction($etat) {
 
 function Enable-Nettoyage([bool]$Applications) {
     if (-not (Test-Path $base)) { New-Item -ItemType Directory -Path $base -Force | Out-Null }
-    $etat = [ordered]@{ depuis = (Get-Date).ToString('o'); plan = $null; services = [ordered]@{}; taches = [ordered]@{}; reglages = [ordered]@{}; applications = @() }
+    $etat = [ordered]@{ depuis = (Get-Date).ToString('o'); plan = $null; services = [ordered]@{}; taches = [ordered]@{}; reglages = [ordered]@{}; applications = @(); politique = @() }
     if (Test-Path $fichierNettoyage) {
         # Appliqué une seconde fois : l'état d'origine reste celui de la première.
         $lu = Get-Content -Raw -Path $fichierNettoyage | ConvertFrom-Json
@@ -658,6 +658,7 @@ function Enable-Nettoyage([bool]$Applications) {
             if ($lu.$x) { foreach ($q in $lu.$x.PSObject.Properties) { $etat[$x][$q.Name] = $q.Value } }
         }
         $etat.applications = @($lu.applications | Where-Object { $_ })
+        $etat.politique = @($lu.politique | Where-Object { $_ })
     }
     foreach ($n in $servicesNettoyage) {
         $cle = Join-Path $cleServices $n
@@ -705,6 +706,12 @@ function Enable-Nettoyage([bool]$Applications) {
             else { $refus += "réglage $($r[1]) ($($_.Exception.Message))" }
         }
     }
+    # Les widgets, protégés par UCPD : la stratégie locale les coupe.
+    $widgets = $null
+    if ($etat.proteges -contains 'AllowNewsAndInterests') {
+        $widgets = Disable-Widgets $etat ([ref]$refus)
+        if (@($etat.politique) -contains 'AllowNewsAndInterests') { $etat.proteges = @($etat.proteges | Where-Object { $_ -ne 'AllowNewsAndInterests' }); $reglages++ }
+    }
     # Le plan choisi et les réglages protégés sont gardés : le contrôle les
     # relit, le retour supprime le plan.
     Write-Utf8 $fichierNettoyage ($etat | ConvertTo-Json -Depth 6)
@@ -734,7 +741,8 @@ function Enable-Nettoyage([bool]$Applications) {
     $txt = "profil appliqué : $plan, $services service(s) et $taches tâche(s) coupés, $reglages réglages posés"
     if ($Applications) { $txt += ", $(@($result.applications).Count) application(s) retirée(s)" }
     if ($sansListe) { $txt += ". Applications pas retirées : Windows refuse d'en donner la liste ($sansListe)" }
-    if ($etat.proteges.Count) { $txt += ". Laissé à Windows, qui le protège (pilote UCPD actif) : $($etat.proteges -join ', ')" }
+    if ($widgets) { $txt += ". Widgets coupés $widgets" }
+    elseif (@($etat.proteges).Count) { $txt += ". Laissé à Windows, qui le protège (pilote UCPD actif) : $($etat.proteges -join ', ')" }
     if ($refus.Count) { $txt += ". Refusé par Windows : $($refus -join ', ')" }
     $result.detail = $txt + '. Le démarrage rapide est coupé : effet complet au prochain redémarrage'
 }
@@ -772,8 +780,19 @@ function Disable-Nettoyage {
             $taches++
         } catch { $echecs += "tâche $($q.Name.Substring($i + 1))" }
     }
+    # Ce que la stratégie locale a posé, elle le retire (UCPD refuse le reste).
+    $politique = @($etat.politique | Where-Object { $_ })
+    if ($politique.Count) {
+        try {
+            $retirer = New-Object System.Collections.ArrayList
+            foreach ($x in $reglagesNettoyage) { if ($politique -contains $x[1]) { [void]$retirer.Add(@($x[0], $x[1], $null)) } }
+            $erreur = Set-PolitiqueLocale $retirer
+            if ($erreur) { $echecs += "stratégie locale ($erreur)" }
+        } catch { $echecs += "stratégie locale ($($_.Exception.Message))" }
+    }
     foreach ($q in @($etat.reglages.PSObject.Properties)) {
         $cle, $nom = $q.Name -split '\|', 2
+        if ($politique -contains $nom) { continue }
         try { Set-Valeur $cle $nom $q.Value 'DWord' } catch { $echecs += "réglage $nom" }
     }
     $apps = @($etat.applications | Where-Object { $_ })

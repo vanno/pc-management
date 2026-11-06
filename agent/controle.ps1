@@ -391,7 +391,8 @@ function Test-Nettoyage([bool]$Actif) {
         $proteges = @($e.proteges | Where-Object { $_ })
         foreach ($r in $reglagesNettoyage) { if ($proteges -notcontains $r[1] -and -not (Test-Egal (Get-Valeur $r[0] $r[1]) $r[2])) { $ko += $r[1] } }
         $n = $reglagesNettoyage.Count - $proteges.Count
-        if ($proteges.Count) { Add-Point 'Réglages protégés' $true "laissés à Windows, qui les protège (UCPD) : $($proteges -join ', ')" }
+        $widgets = $(if (@($e.applications) -contains 'MicrosoftWindows.Client.WebExperience') { ' ; widgets coupés en retirant leur paquet' } else { '' })
+        if ($proteges.Count) { Add-Point 'Réglages protégés' $true "laissés à Windows, qui les protège (UCPD) : $($proteges -join ', ')$widgets" }
     } else {
         $n = 0
         foreach ($q in @($e.reglages.PSObject.Properties)) {
