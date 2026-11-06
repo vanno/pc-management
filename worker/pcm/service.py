@@ -50,7 +50,7 @@ RESULT_MAX = 4000
 # Un poste qui décroche et revient dans ce délai n'est pas relevé une seconde fois.
 BOOT_GAP = timedelta(hours=2)
 
-ACTIONS = ("inventaire", "logiciels", "alimentation", "reseau", "mode_evenement", "supervision", "envoi", "nettoyage", "diagnostic", "fond", "vignette", "message", "mot_de_passe")
+ACTIONS = ("inventaire", "logiciels", "alimentation", "reseau", "mode_evenement", "supervision", "envoi", "nettoyage", "diagnostic", "fond", "vignette", "message", "mot_de_passe", "desinstallation")
 
 
 def load_software(profile_path, installers_path, installers_dir, avd=None):
@@ -434,6 +434,8 @@ class Service:
             return ok, _short(text)
         if action == "logiciels":
             return self.install_profile(device, tag, scheduled=scheduled)
+        if action == "desinstallation":
+            return self.uninstall(device, tag, params)
         if scheduled:
             # L'inventaire de la nuit et celui de l'allumage laissent un poste
             # d'événement tranquille : la lecture SMART et celle des licences
@@ -488,6 +490,19 @@ class Service:
         inv_ok, inv_text = self.inventory(device, tag)
         text += ". Fiche à jour" if inv_ok else f". Inventaire après installation impossible : {inv_text}"
         return all(o.ok for o in outcomes), _short(text)
+
+    def uninstall(self, device: Device, tag: str, params: dict) -> tuple:
+        """Un logiciel retiré, jamais en mode événement, puis l'inventaire
+        relevé pour que la liste d'AVDiagram ne le montre plus."""
+        refused = self._event_refusal(device, "désinstallation")
+        if refused:
+            return False, refused
+        ok, text, controle = pilot.uninstall(self.mesh, device.id, params, inv.new_nonce)
+        self.log(f"{tag} désinstallation {params.get('nom')!r} : {text}")
+        if ok:
+            inv_ok, inv_text = self.inventory(device, tag)
+            text += ". Fiche à jour" if inv_ok else f". Inventaire après désinstallation impossible : {inv_text}"
+        return (ok, _short(text), controle) if controle else (ok, _short(text))
 
     def _logged(self, tag: str, label: str, outcome: sw.Outcome) -> sw.Outcome:
         self.log(f"{tag} {label} : {sw.LABELS[outcome.state]}{' : ' + outcome.detail if outcome.detail else ''}")

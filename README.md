@@ -151,6 +151,28 @@ ne le portent jamais en clair. L'ouverture automatique le range comme Windows
 clair du registre. La tâche relit le mot de passe auprès de Windows et
 l'ouverture automatique avant de se dire faite.
 
+## Désinstaller un logiciel
+
+« Désinstaller » (AVDiagram, Postes, Préparer, Logiciels installés) retire UN
+logiciel de la liste relevée par l'inventaire, sur un ou plusieurs postes
+cochés : une tâche `desinstallation` par poste, `{ nom, version? }`
+(`agent/desinstalle.ps1`, migration 0092 d'AVDiagram). Refusée en mode
+événement. Après une désinstallation réussie, le relais relève l'inventaire :
+la liste d'AVDiagram ne montre plus le logiciel.
+
+Seulement en silencieux, dans cet ordre : MSI (`msiexec /x {GUID} /qn
+/norestart`), la commande silencieuse écrite par l'éditeur
+(`QuietUninstallString`), Inno Setup (`/VERYSILENT /SUPPRESSMSGBOXES
+/NORESTART`), puis `winget uninstall --name <nom> --exact --silent`. Sans
+aucune des quatre, rien n'est lancé et la tâche le dit : un désinstalleur à
+fenêtre attendrait un clic en compte SYSTEM. 10 minutes par désinstalleur,
+puis arrêt ; le registre est relu une minute pour le contrôle (« encore
+listé » = échec). Jamais de redémarrage, seulement signalé. L'agent
+MeshCentral est refusé, par le relais et par le poste.
+
+Limite : les logiciels installés « pour un utilisateur » (HKCU) ne sont pas
+dans l'inventaire, donc pas proposés.
+
 ## Diagnostic réseau et réseaux du parc
 
 « Diagnostic réseau » (page Postes) lance `agent/diagnostic.ps1` sur le poste,

@@ -93,6 +93,8 @@ class FakeMesh:
                 return pnpl_reply(nonce, op="cle", ok=True, n=base64.b64encode(pn.n.to_bytes(256, "big")).decode(), e=base64.b64encode(pn.e.to_bytes(3, "big")).decode())
             if params["op"] == "mot_de_passe":
                 return pnpl_reply(nonce, op="mot_de_passe", ok=True, detail="mot de passe de PN 1 changé", points=[{"nom": "Mot de passe", "ok": True, "constat": "PN 1 : accepté par Windows"}])
+            if params["op"] == "desinstaller":
+                return pnpl_reply(nonce, op="desinstaller", ok=True, detail=f"{params['nom']} désinstallé (Windows Installer)", points=[{"nom": params["nom"], "ok": True, "constat": "retiré de la liste des logiciels de Windows"}])
             if params["op"] == "fond":
                 return pnpl_reply(nonce, op="fond", ok=True, detail="fond d'état posé. Session de vannh : affiché sur 1 écran(s)", points=[])
             return pnpl_reply(nonce, op=params["op"], ok=True, detail="mode événement actif")
@@ -536,6 +538,30 @@ class ServiceTests(unittest.TestCase):
         self.assertTrue(avd.finished[0][1])
         self.assertEqual(avd.controles[0]["etat"], "verifie")
         self.assertNotIn("Regie-2026!", " ".join(self.logs) + json.dumps(mesh.pilot_ops) + json.dumps(avd.finished))
+
+    def test_uninstall_one_software_then_inventory(self):
+        mesh = FakeMesh([PN01])
+        avd = FakeAvd([{**task(action="desinstallation", id="d1"), "params": {"nom": "VLC media player", "version": "3.0.21"}}])
+        svc = self.service(mesh, avd)
+        svc.tick()
+        self.assertEqual([o["op"] for o in mesh.pilot_ops], ["etat", "desinstaller"])
+        self.assertEqual(mesh.pilot_ops[1], {"op": "desinstaller", "nom": "VLC media player", "version": "3.0.21"})
+        self.assertIn("function Remove-Logiciel", mesh.pilot_scripts[1])
+        self.assertTrue(avd.finished[0][1])
+        self.assertIn("VLC media player désinstallé", avd.finished[0][2])
+        self.assertIn("Fiche à jour", avd.finished[0][2])
+        self.assertEqual(avd.controles[0]["etat"], "verifie")
+        self.assertEqual(len(avd.inventories), 1)
+
+    def test_uninstall_refused_in_event_mode(self):
+        mesh = FakeMesh([PN01])
+        mesh.event = True
+        avd = FakeAvd([{**task(action="desinstallation", id="d1"), "params": {"nom": "Zoom Workplace"}}])
+        svc = self.service(mesh, avd)
+        svc.tick()
+        self.assertEqual([o["op"] for o in mesh.pilot_ops], ["etat"])
+        self.assertFalse(avd.finished[0][1])
+        self.assertIn("mode événement", avd.finished[0][2])
 
     def test_message_toast_outside_event_mode(self):
         mesh = FakeMesh([PN01])

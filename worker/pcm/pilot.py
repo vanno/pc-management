@@ -59,6 +59,7 @@ SURVEY_INSTALLER = Path(__file__).resolve().parents[2] / "agent" / "releve-pose.
 THUMBNAIL_SCRIPT = Path(__file__).resolve().parents[2] / "agent" / "vignette.ps1"
 THUMBNAIL_INSTALLER = Path(__file__).resolve().parents[2] / "agent" / "vignette-pose.ps1"
 PASSWORD_SCRIPT = Path(__file__).resolve().parents[2] / "agent" / "motdepasse.ps1"
+UNINSTALL_SCRIPT = Path(__file__).resolve().parents[2] / "agent" / "desinstalle.ps1"
 CHECK_SCRIPT = Path(__file__).resolve().parents[2] / "agent" / "controle.ps1"
 # L'envoi à la console régie locale, posé dans le dossier de la sonde.
 CONSOLE_SCRIPT = Path(__file__).resolve().parents[2] / "agent" / "console.ps1"
@@ -789,6 +790,44 @@ def password(
                 return False, "Clé du poste illisible.", None
             body["chiffre"] = base64.b64encode(oaep_encrypt(n, e, secret.encode("utf-8"))).decode("ascii")
         reply = call(mesh, device_id, body, new_nonce, script=script)
+    except (MeshError, PilotError) as exc:
+        return False, str(exc), None
+    detail = str(reply.get("detail") or "")
+    text = detail[:1].upper() + detail[1:] if detail else "Sans réponse lisible du poste."
+    controle = verdict(reply.get("points")) if reply.get("points") else None
+    return bool(reply.get("ok")), text, controle
+
+
+# Le désinstalleur a 10 minutes sur le poste, plus la relecture du registre.
+UNINSTALL_TIMEOUT = 780
+SOFTWARE_NAME_MAX = 200
+# L'agent MeshCentral : le désinstaller couperait le poste du relais.
+PROTECTED_SOFTWARE = ("mesh agent", "meshcentral agent", "meshagent")
+
+
+def uninstall(
+    mesh: MeshCtrl,
+    device_id: str,
+    params: dict,
+    new_nonce: Callable[[], str],
+    script: str | None = None,
+) -> tuple[bool, str, dict | None]:
+    """Désinstalle UN logiciel, nommé comme l'inventaire le lit (`nom`,
+    `version` facultative), par sa commande silencieuse seulement
+    (agent/desinstalle.ps1). Le contrôle dit s'il est encore listé."""
+    name = params.get("nom")
+    version = params.get("version")
+    if not isinstance(name, str) or not name.strip() or len(name) > SOFTWARE_NAME_MAX or CONTROL_RE.search(name):
+        return False, "Nom de logiciel refusé.", None
+    if version is not None and (not isinstance(version, str) or len(version) > 100 or CONTROL_RE.search(version)):
+        return False, "Version refusée.", None
+    if any(p in name.lower() for p in PROTECTED_SOFTWARE):
+        return False, "L'agent MeshCentral ne se désinstalle pas d'ici : le poste serait perdu pour le relais.", None
+    body: dict = {"op": "desinstaller", "nom": name.strip()}
+    if version:
+        body["version"] = version.strip()
+    try:
+        reply = call(mesh, device_id, body, new_nonce, timeout=UNINSTALL_TIMEOUT, script=script or UNINSTALL_SCRIPT.read_text(encoding="utf-8"))
     except (MeshError, PilotError) as exc:
         return False, str(exc), None
     detail = str(reply.get("detail") or "")
