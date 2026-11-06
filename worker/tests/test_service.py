@@ -752,3 +752,96 @@ class ReposeTests(unittest.TestCase):
         self.assertEqual(set(v), {"fond", "vignette", "supervision"})
         self.assertTrue(all(re.fullmatch(r"[0-9a-f]{12}", x) for x in v.values()))
         self.assertIn(pilot.SURVEY_SCRIPT, pilot.POSED["fond"])
+
+
+class BootAvd(FakeAvd):
+    def __init__(self, *a, refus=False, **kw):
+        super().__init__(*a, **kw)
+        self.requests = []
+        self.refus = refus
+
+    def request_tasks(self, action, asset_tags, params=None):
+        self.requests.append((action, list(asset_tags), params))
+        if self.refus:
+            raise AvdError("injoignable")
+        return {"requested": len(asset_tags), "busy": 0, "unknown": []}
+
+
+class BootInventoryTests(unittest.TestCase):
+    """Inventaire à chaque allumage (santé des disques, batterie, licences)."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.store = Store(Path(self.tmp.name) / "pcm.sqlite")
+        self.logs = []
+        self.now = datetime(2026, 11, 6, 9, 0, tzinfo=timezone.utc)
+        self.pn02 = Device("node//pn02", "pn2", "Régie", False, "Windows 10 Famille")
+        self.mesh = FakeMesh([PN01, self.pn02])
+
+    def tearDown(self):
+        self.store.db.close()
+        self.tmp.cleanup()
+
+    def service(self, avd):
+        return Service(self.mesh, avd, self.store, {"PN2": "PN02"}, logger=self.logs.append, clock=lambda: self.now)
+
+    def power(self, online):
+        self.mesh.devices = [PN01, Device("node//pn02", "pn2", "Régie", online, "Windows 10 Famille")]
+
+    def test_only_a_poste_that_comes_online(self):
+        avd = BootAvd()
+        svc = self.service(avd)
+        svc.tick()
+        self.assertEqual(avd.requests, [], "le démarrage du relais ne relève pas tout le parc")
+        self.power(True)
+        svc.tick()
+        self.assertEqual(avd.requests, [("inventaire", ["PN02"], {"planifie": True, "allumage": True})])
+        svc.tick()
+        self.assertEqual(len(avd.requests), 1)
+
+    def test_flapping_poste_relevé_once_per_two_hours(self):
+        avd = BootAvd()
+        svc = self.service(avd)
+        svc.tick()
+        for _ in range(3):
+            self.power(True)
+            svc.tick()
+            self.power(False)
+            svc.tick()
+            self.now += timedelta(minutes=20)
+        self.assertEqual(len(avd.requests), 1)
+        self.now += timedelta(hours=2)
+        self.power(True)
+        svc.tick()
+        self.assertEqual(len(avd.requests), 2)
+
+    def test_refusal_logged_and_retried_at_next_boot(self):
+        avd = BootAvd(refus=True)
+        svc = self.service(avd)
+        svc.tick()
+        self.power(True)
+        svc.tick()
+        self.assertTrue(any("allumage" in l and "impossible" in l for l in self.logs))
+        avd.refus = False
+        self.power(False)
+        svc.tick()
+        self.power(True)
+        svc.tick()
+        self.assertEqual(len(avd.requests), 2)
+
+    def test_scheduled_inventory_skipped_in_event_mode(self):
+        avd = FakeAvd([task(params={"planifie": True, "allumage": True})])
+        mesh = FakeMesh([PN01])
+        mesh.event = True
+        Service(mesh, avd, self.store, {}, logger=self.logs.append).tick()
+        (_, ok, result), = avd.finished
+        self.assertTrue(ok)
+        self.assertIn("Ignoré : mode événement", result)
+        self.assertEqual(avd.inventories, [])
+
+    def test_clicked_inventory_runs_in_event_mode(self):
+        avd = FakeAvd([task()])
+        mesh = FakeMesh([PN01])
+        mesh.event = True
+        Service(mesh, avd, self.store, {}, logger=self.logs.append).tick()
+        self.assertEqual(avd.inventories, ["PN01"])

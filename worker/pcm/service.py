@@ -47,6 +47,9 @@ from .sync import process
 
 SOURCE = "pc-management"
 RESULT_MAX = 4000
+# Un poste qui décroche et revient dans ce délai n'est pas relevé une seconde fois.
+BOOT_GAP = timedelta(hours=2)
+
 ACTIONS = ("inventaire", "logiciels", "alimentation", "reseau", "mode_evenement", "supervision", "envoi", "nettoyage", "diagnostic", "fond", "vignette", "message", "mot_de_passe")
 
 
@@ -135,6 +138,9 @@ class Service:
         self._version_at: datetime | None = None
         self._plan_failed: dict[str, datetime] = {}
         self._repose_failed: dict[str, datetime] = {}
+        # Les postes en ligne au battement précédent (None au démarrage du
+        # service : un redémarrage du relais ne fait pas relever tout le parc).
+        self._online: set[str] | None = None
         self.data_dir = os.path.dirname(os.path.abspath(os.environ.get("PCM_DB", "data/pcm.sqlite")))
         if self.schedules:
             self.tool["schedule"] = {
@@ -166,6 +172,7 @@ class Service:
         ]
         self.seen = seen
         self._maintenance(by_tag)
+        self._on_boot(by_tag)
         self._repose(by_tag)
         self.tool["nas"] = self._nas_state()
         extra = {"tool": self.tool} if self.tool else {}
@@ -296,6 +303,34 @@ class Service:
             self.store.set_last_run(name, now)
             self.log(f"planification {name} ({slot.label()}) : {res.get('requested', 0)} poste(s) en ligne, {res.get('busy', 0)} déjà occupé(s)")
 
+    def _on_boot(self, by_tag: dict[str, Device]) -> None:
+        """Un poste qui vient d'apparaître en ligne dans MeshCentral est relevé
+        (inventaire, santé des disques et de la batterie, licences) : la fiche
+        suit chaque allumage. Pas plus d'une fois toutes les BOOT_GAP par poste,
+        pour qu'un Wi-Fi qui décroche ne relance pas l'inventaire en boucle. La
+        tâche est planifiée : elle passe « ignorée » si le poste s'éteint avant
+        son tour ou s'il est en mode événement."""
+        online = {tag for tag, d in by_tag.items() if d.online}
+        before, self._online = self._online, online
+        if before is None or not hasattr(self.avd, "request_tasks"):
+            return
+        now = self.clock()
+        fresh = []
+        for tag in sorted(online - before):
+            last = self.store.last_run(f"allumage:{tag}")
+            if last is None or now - last >= BOOT_GAP:
+                fresh.append(tag)
+        if not fresh:
+            return
+        try:
+            res = self.avd.request_tasks("inventaire", fresh, {"planifie": True, "allumage": True})
+        except AvdError as exc:
+            self.log(f"inventaire à l'allumage ({', '.join(fresh)}) impossible : {exc}")
+            return
+        for tag in fresh:
+            self.store.set_last_run(f"allumage:{tag}", now)
+        self.log(f"allumage de {', '.join(fresh)} : inventaire demandé ({res.get('requested', 0)} tâche(s), {res.get('busy', 0)} déjà en cours)")
+
     def _repose(self, by_tag: dict[str, Device]) -> None:
         """Après une mise à jour du relais qui change l'écran, le mur ou la sonde,
         AVDiagram les fait reposer là où ils sont posés : un poste n'a plus
@@ -399,6 +434,13 @@ class Service:
             return ok, _short(text)
         if action == "logiciels":
             return self.install_profile(device, tag, scheduled=scheduled)
+        if scheduled:
+            # L'inventaire de la nuit et celui de l'allumage laissent un poste
+            # d'événement tranquille : la lecture SMART et celle des licences
+            # coûtent quelques secondes de processeur pendant le direct.
+            refused = self._event_refusal(device, "inventaire")
+            if refused:
+                return True, "Ignoré : mode événement. Inventaire au prochain allumage ou cette nuit."
         return self.inventory(device, tag)
 
     def password(self, device: Device, task: dict, params: dict) -> tuple:
@@ -415,13 +457,13 @@ class Service:
         ok, text, controle = done
         return (ok, _short(text), controle) if controle else (ok, _short(text))
 
-    def _event_refusal(self, device: Device) -> str | None:
+    def _event_refusal(self, device: Device, what: str = "installation") -> str | None:
         """Un poste en mode événement ne reçoit pas d'installation. Un poste qui
         ne sait pas répondre (ancienne version, panne passagère) n'est pas bloqué."""
         try:
             st = pilot.state(self.mesh, device.id, inv.new_nonce, script=self.pilot_script)
         except (MeshError, pilot.PilotError) as exc:
-            self.log(f"{device.name} : état du mode événement illisible ({exc}), installation lancée")
+            self.log(f"{device.name} : état du mode événement illisible ({exc}), {what} lancée")
             return None
         if st.get("evenement"):
             return f"Refusé : {device.name} est en mode événement depuis le {str(st.get('depuis') or '?')[:16].replace('T', ' ')}. Terminez le mode événement d'abord."

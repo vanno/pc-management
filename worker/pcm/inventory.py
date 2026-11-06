@@ -11,7 +11,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 MARKER = "PNINV1:"
-SCHEMA = 1
+# 1 : l'inventaire d'origine. 2 : santé des disques (SMART), cycles de la
+# batterie, licences Windows et vMix. Un poste resté sur l'ancien script
+# (relais pas encore à jour) rend encore 1 : il reste lu.
+SCHEMAS = (1, 2)
 AGENT_SCRIPT = Path(__file__).resolve().parents[2] / "agent" / "inventory.ps1"
 
 # Windows refuse une ligne de commande de plus de 32 767 caractères. On garde
@@ -70,7 +73,7 @@ def parse_output(output: str, nonce: str = "") -> dict:
             data = json.loads(base64.b64decode(payload, validate=True).decode("utf-8"))
         except (binascii.Error, UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise InventoryError(f"Charge utile illisible : {exc}") from exc
-        if data.get("schema") != SCHEMA:
+        if data.get("schema") not in SCHEMAS:
             raise InventoryError(f"Version de schéma inattendue : {data.get('schema')!r}")
         return _normalise(data)
     excerpt = output.strip()[:300] or "(sortie vide)"
@@ -90,6 +93,8 @@ def _normalise(data: dict) -> dict:
     for nic in data["network"]:
         nic["ipv4"] = _as_list(nic.get("ipv4"))
         nic["gateway"] = _as_list(nic.get("gateway"))
+    if not isinstance(data.get("licenses"), dict):
+        data["licenses"] = {}
     return data
 
 
@@ -196,7 +201,111 @@ def _go(octets) -> float | None:
         return None
 
 
-def avd_payload(data: dict, changes: "Diff | None" = None, source: str = "pc-management") -> dict:
+def _int(value) -> int | None:
+    try:
+        return None if value is None or value == "" or isinstance(value, bool) else int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _flag(value) -> bool | None:
+    return value if isinstance(value, bool) else None
+
+
+def _disk(d: dict) -> dict:
+    """Un disque et sa santé (schéma 2). Un compteur absent reste hors du message."""
+    media = d.get("media") or None
+    out = {
+        "model": d["model"],
+        "size_gb": _go(d.get("size_bytes")),
+        "bus": d.get("bus") or d.get("interface"),
+        "serial": (d.get("serial") or "").strip() or None,
+        "system": _flag(d.get("system")),
+        "health": d.get("health") or None,
+        # « Unspecified » n'apprend rien.
+        "media": None if media in ("Unspecified", "0") else media,
+        "wear_pct": _int(d.get("wear_pct")),
+        "temperature_c": _int(d.get("temperature_c")),
+        "power_on_hours": _int(d.get("power_on_hours")),
+        "read_errors": _int(d.get("read_errors")),
+        "write_errors": _int(d.get("write_errors")),
+        "predict_failure": _flag(d.get("predict_failure")),
+    }
+    return {k: v for k, v in out.items() if v is not None}
+
+
+# SoftwareLicensingProduct.LicenseStatus
+WINDOWS_STATUS = {0: "non activée", 1: "activée", 2: "délai de grâce", 3: "délai de grâce", 4: "non authentique", 5: "notification", 6: "délai de grâce"}
+_VMIX = re.compile(r"^vMix\b", re.I)
+
+
+def _vmix_seen(data: dict | None) -> tuple[str | None, str | None]:
+    """L'édition vMix lue dans un relevé (ou gardée d'un précédent), et sa date."""
+    v = ((data or {}).get("licenses") or {}).get("vmix")
+    if not isinstance(v, dict) or not v.get("edition"):
+        return None, None
+    return v["edition"], v.get("edition_seen_at") or (data or {}).get("collected_at")
+
+
+def licenses(data: dict, previous: dict | None = None) -> dict:
+    """Les licences Windows et vMix. L'édition de vMix ne se lit que vMix
+    ouvert : fermé, on garde celle du relevé précédent, avec sa date."""
+    lic = data.get("licenses") or {}
+    out: dict = {}
+    w = lic.get("windows")
+    if isinstance(w, dict):
+        status = _int(w.get("status"))
+        channel = (w.get("channel") or "").strip()
+        if not channel:
+            # Avant Windows 10 1903, le canal n'est que dans la description.
+            m = re.search(r"([A-Z][A-Z_:]+) channel", w.get("description") or "")
+            channel = m.group(1) if m else ""
+        out["windows"] = {
+            k: v
+            for k, v in {
+                "activated": None if status is None else status == 1,
+                "status": None if status is None else WINDOWS_STATUS.get(status, f"état {status}"),
+                "channel": channel or None,
+                "name": w.get("name") or None,
+                "partial_key": w.get("partial_key") or None,
+                "firmware_key": _flag(w.get("firmware_key")),
+            }.items()
+            if v is not None
+        }
+    installed = next((sw for sw in data.get("software", []) if _VMIX.match(sw.get("name") or "")), None)
+    v = lic.get("vmix") if isinstance(lic.get("vmix"), dict) else {}
+    edition, seen = _vmix_seen(data)
+    if edition is None:
+        edition, seen = _vmix_seen(previous)
+    if installed or v or edition:
+        out["vmix"] = {
+            k: val
+            for k, val in {
+                "installed_version": (installed or {}).get("version"),
+                "running_version": v.get("version") or None,
+                "edition": edition,
+                "edition_seen_at": seen,
+                "running": bool(v.get("running")),
+            }.items()
+            if val is not None
+        }
+    return out
+
+
+def carry_over(data: dict, previous: dict | None) -> dict:
+    """L'édition vMix vue la dernière fois, gardée dans l'historique du NAS
+    pour le prochain relevé où vMix sera fermé."""
+    if _vmix_seen(data)[0]:
+        return data
+    edition, seen = _vmix_seen(previous)
+    if edition:
+        lic = dict(data.get("licenses") or {})
+        lic["vmix"] = {**(lic.get("vmix") or {}), "edition": edition, "edition_seen_at": seen}
+        data["licenses"] = lic
+    return data
+
+
+def avd_payload(data: dict, changes: "Diff | None" = None, source: str = "pc-management", previous: dict | None = None) -> dict:
     """L'inventaire détaillé au format de l'outil MCP AVDiagram set_unit_inventory."""
     s = data.get("system") or {}
     w = data.get("windows") or {}
@@ -216,7 +325,10 @@ def avd_payload(data: dict, changes: "Diff | None" = None, source: str = "pc-man
         "threads": cpu.get("threads"),
         "ram_gb": _go(s.get("ram_bytes")),
         "gpus": [{"name": g["name"], "driver": g.get("driver_version")} for g in data["gpus"] if g.get("name")],
-        "disks": [{"model": d["model"], "size_gb": _go(d.get("size_bytes")), "bus": d.get("interface")} for d in data["disks"] if d.get("model")],
+        "product": (s.get("family") or "").strip() or None,
+        "sku": (s.get("sku") or "").strip() or None,
+        "bios_date": s.get("bios_date"),
+        "disks": [_disk(d) for d in data["disks"] if d.get("model")],
         "volumes": [
             {"drive": v["letter"], "size_gb": _go(v.get("size_bytes")), "free_gb": _go(v.get("free_bytes"))}
             for v in data["volumes"] if v.get("letter")
@@ -226,6 +338,10 @@ def avd_payload(data: dict, changes: "Diff | None" = None, source: str = "pc-man
             for n in data["network"] if n.get("name") and n.get("connected")
         ],
         "battery_health_pct": battery.get("health_percent"),
+        "battery_cycles": _int(battery.get("cycle_count")),
+        "battery_design_mwh": _int(battery.get("designed_mwh")),
+        "battery_full_mwh": _int(battery.get("full_charged_mwh")),
+        "licenses": licenses(data, previous) or None,
     }
     payload = {
         "collected_at": data.get("collected_at"),
