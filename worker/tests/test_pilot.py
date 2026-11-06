@@ -689,3 +689,38 @@ class PasswordTests(unittest.TestCase):
     def test_password_script_fits_the_command_line(self):
         cmd = pilot.build_command({"op": "mot_de_passe", "compte": "PN 9", "auto": True, "chiffre": "A" * 344}, "00ff", pilot.PASSWORD_SCRIPT.read_text(encoding="utf-8"))
         self.assertLess(len(cmd), 18_000)
+
+
+class UninstallTest(unittest.TestCase):
+    def test_one_software_with_its_version_and_a_long_timeout(self):
+        mesh = FakeMesh({"desinstaller": [{"ok": True, "detail": "zoom désinstallé (winget)", "points": [{"nom": "Zoom", "ok": True, "constat": "retiré"}]}]})
+        ok, text, controle = pilot.uninstall(mesh, "n", {"nom": " Zoom ", "version": "6.2"}, nonces())
+        self.assertTrue(ok)
+        self.assertEqual(text, "Zoom désinstallé (winget)")
+        self.assertEqual(controle["etat"], "verifie")
+        self.assertEqual(mesh.calls, [({"op": "desinstaller", "nom": "Zoom", "version": "6.2"}, pilot.UNINSTALL_TIMEOUT)])
+
+    def test_still_listed_is_a_failure(self):
+        mesh = FakeMesh({"desinstaller": [{"ok": False, "detail": "Zoom est encore listé", "points": [{"nom": "Zoom", "ok": False, "constat": "encore là"}]}]})
+        ok, _, controle = pilot.uninstall(mesh, "n", {"nom": "Zoom"}, nonces())
+        self.assertFalse(ok)
+        self.assertEqual(controle["etat"], "pas_applique")
+
+    def test_refused_before_reaching_the_poste(self):
+        mesh = FakeMesh({})
+        for params in ({}, {"nom": ""}, {"nom": "a" * 201}, {"nom": "Mesh Agent"}, {"nom": "x\x00"}, {"nom": "VLC", "version": 3}):
+            self.assertFalse(pilot.uninstall(mesh, "n", params, nonces())[0], params)
+        self.assertEqual(mesh.calls, [])
+
+    def test_script_fits_the_command_line(self):
+        cmd = pilot.build_command({"op": "desinstaller", "nom": "A" * 200, "version": "1" * 100}, "00ff", pilot.UNINSTALL_SCRIPT.read_text(encoding="utf-8"))
+        self.assertLess(len(cmd), 18_000)
+
+    def test_script_only_runs_silent_uninstallers(self):
+        script = pilot.UNINSTALL_SCRIPT.read_text(encoding="utf-8")
+        self.assertIn("/qn /norestart", script)
+        self.assertIn("QuietUninstallString", script)
+        self.assertIn("--silent", script)
+        # Un UninstallString nu (avec fenêtre) n'est lancé que pour Inno Setup, avec ses options silencieuses.
+        self.assertEqual(script.count("$Ligne.UninstallString + "), 1)
+        self.assertNotIn("Restart-Computer", script)
