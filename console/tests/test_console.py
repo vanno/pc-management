@@ -93,6 +93,14 @@ class EtatTests(unittest.TestCase):
         self.assertEqual((v["pn_resume"], v["pn_hors_ligne"], v["pn_etat"]), ("1/2 OK", "1", "ALERTE"))
 
 
+class AdressesTests(unittest.TestCase):
+    def test_lan_first_vpn_last(self):
+        from regie.serveur import ordre_adresse
+
+        vues = ["100.114.184.1", "192.168.192.1", "192.168.1.44", "10.0.0.2"]
+        self.assertEqual(sorted(vues, key=ordre_adresse), ["10.0.0.2", "192.168.1.44", "192.168.192.1", "100.114.184.1"])
+
+
 class StoreTests(unittest.TestCase):
     def test_keeps_last_and_history(self):
         t = [1000.0]
