@@ -93,6 +93,36 @@ class EtatTests(unittest.TestCase):
         self.assertEqual((v["pn_resume"], v["pn_hors_ligne"], v["pn_etat"]), ("1/2 OK", "1", "ALERTE"))
 
 
+class VmixTests(unittest.TestCase):
+    def vm(self, **k):
+        base = {"ok": True, "running": True, "streaming": True, "channels": [True], "recording": False, "stopped_at": None, "dropped": None, "dropped_new": None}
+        return {**base, **k}
+
+    def test_live_poste(self):
+        now = 1000.0
+        m = mesure(nics=[{**mesure()["nics"][0], "tx": 6_000_000}])
+        m["vmix"] = self.vm(recording=True, recording_s=300)
+        e = etat.etat_poste({"reference": "PN09", "recu": now, "mesure": m}, now)
+        self.assertEqual((e["etat"], e["vmix"]), ("ok", "LIVE REC"))
+        v = etat.variables_companion([e])
+        self.assertEqual((v["pn_pn09_vmix"], v["pn_live"]), ("LIVE REC", "1"))
+        self.assertTrue(v["pn_pn09_texte"].startswith("LIVE REC CPU"))
+
+    def test_vmix_alerts(self):
+        m = mesure(nics=[{**mesure()["nics"][0], "tx": 1000}])
+        m["vmix"] = self.vm(channels=[True, False], dropped_new=12)
+        self.assertEqual(etat.alertes_vmix(m), ["Stream vMix actif mais rien ne sort", "Destination 2 coupée", "vMix : 12 images perdues"])
+        m["vmix"] = self.vm(streaming=False, channels=[False], stopped_at="2026-11-06T16:32:11Z")
+        self.assertEqual(len(etat.alertes_vmix(m)), 1)
+        self.assertTrue(etat.alertes_vmix(m)[0].startswith("Stream vMix arrêté à "))
+        m["vmix"] = {"ok": False, "running": True}
+        self.assertEqual(etat.alertes_vmix(m), ["vMix ne répond pas (Web Controller ?)"])
+        self.assertEqual(etat.etiquette_vmix(m["vmix"]), "MUET")
+        self.assertEqual(etat.etiquette_vmix({"ok": False, "running": False}), "FERMÉ")
+        self.assertEqual(etat.etiquette_vmix(None), "")
+        self.assertEqual(etat.alertes_vmix(mesure()), [])
+
+
 class AdressesTests(unittest.TestCase):
     def test_lan_first_vpn_last(self):
         from regie.serveur import ordre_adresse

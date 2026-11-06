@@ -1,0 +1,25 @@
+# Lecture de vMix et test de sortie avant le direct : essai sous Windows
+# PowerShell 5.1, avec un faux vMix et de faux serveurs RTMP et SRT
+# (agent/essai-direct.ps1).
+name: Direct
+
+on:
+  pull_request:
+    paths: ["agent/vmix.ps1", "agent/diagnostic.ps1", "agent/supervision.ps1", "agent/console-pose.ps1", "agent/essai-direct.ps1", ".github/workflows/direct.yml"]
+  push:
+    branches: [main]
+    paths: ["agent/vmix.ps1", "agent/diagnostic.ps1", "agent/supervision.ps1", "agent/console-pose.ps1", "agent/essai-direct.ps1", ".github/workflows/direct.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Essai sous Windows PowerShell 5.1
+        shell: powershell
+        run: .\agent\essai-direct.ps1

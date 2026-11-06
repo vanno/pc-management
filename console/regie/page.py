@@ -103,6 +103,7 @@ function afficher(d){
       <div class="doux">${esc(p.adresses.join(", ") || p.adresse || "")} · ${age(p.age)}</div>
       <div class="chiffres"><div><span>CPU</span>${pct(p.cpu)}</div><div><span>Mémoire</span>${pct(p.ram)}</div><div><span>Disque libre</span>${pct(p.disque)}</div>
       <div><span>Passerelle</span>${ms(p.passerelle_ms)}</div><div><span>Reçu</span>${debit(p.rx)}</div><div><span>Envoyé</span>${debit(p.tx)}</div></div>
+      ${p.vmix?`<div class="doux">vMix : <b>${esc(p.vmix)}</b>${p.vmix_detail&&p.vmix_detail.recording_s!=null&&p.vmix_detail.recording?` · enregistrement ${Math.floor(p.vmix_detail.recording_s/60)} min`:""}${p.vmix_detail&&p.vmix_detail.dropped!=null?` · ${p.vmix_detail.dropped} images perdues au journal`:""}</div>`:""}
       ${p.alertes.map(a => `<div class="al">${esc(a)}</div>`).join("")}
       ${p.internet===false?'<div class="doux">Pas d\'internet</div>':""}
     </div>`).join("") : `<div class="vide">Aucune sonde n'a encore écrit à cette console. Vérifiez que le code d'appairage est posé sur le relais du NAS (voir plus bas), puis que les postes ont été supervisés à nouveau depuis AVDiagram.</div>`;
@@ -124,7 +125,7 @@ function afficher(d){
   $("companion").innerHTML = `<div>${esc(etatCo)}</div>
     ${c.local?`<div class="ligne"><input type="text" id="co-url" placeholder="http://127.0.0.1:8000" value="${esc(c.companion_url)}"><button id="co-ok">Enregistrer</button></div>`:""}
     <details id="co-details"${ouvert?" open":""}><summary>Variables à créer dans Companion (Variables personnalisées)</summary>
-    <p class="doux">Sur un bouton : texte <span class="mono">$(custom:pn_pn09_texte)</span>, retour interne « Variable : vérifier la valeur » sur <span class="mono">pn_pn09_etat</span> égal à ALERTE ou HORS LIGNE pour la couleur.</p>
+    <p class="doux">Sur un bouton : texte <span class="mono">$(custom:pn_pn09_texte)</span>, retour interne « Variable : vérifier la valeur » sur <span class="mono">pn_pn09_etat</span> égal à ALERTE ou HORS LIGNE pour la couleur. vMix : <span class="mono">$(custom:pn_pn09_vmix)</span> (LIVE, REC, LIVE REC, PRÊT, MUET, FERMÉ), et <span class="mono">pn_live</span> pour le nombre de postes en stream.</p>
     <table><tr><th>Variable</th><th>Valeur</th></tr><tbody id="co-vars"></tbody></table></details>
     ${c.local?`<p class="doux">Companion sur un autre appareil : lecture sans pousser par <span class="mono">GET https://${esc(c.adresses[0]||"adresse")}:${c.port_https}/api/companion/pn_resume?jeton=${esc(c.jeton_companion)}</span></p>`:""}`;
   if(c.local){ $("co-ok").onclick = () => regler({companion_url: $("co-url").value}); }

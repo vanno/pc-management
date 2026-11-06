@@ -439,6 +439,41 @@ l'intervalle, et une carte filaire tombée depuis moins de 10 minutes
 switchs non manageables (GS105), c'est le seul regard sur le câble. Un poste
 déjà supervisé reçoit cette sonde au prochain « Superviser ».
 
+## vMix et test de sortie avant le direct
+
+Lecture de vMix : `agent/vmix.ps1`, posé à côté de la sonde par
+`agent/console-pose.ps1` (avec BOM, même sans console régie), appelé à
+chaque mesure. Il lit l'API locale de vMix (`http://127.0.0.1:8088/api`, puis
+le port TCP 8099, commande `XML`) et ajoute à la mesure `vmix` : stream et
+chaque destination (`channel1` à `channel5`), enregistrement et sa durée,
+External, MultiCorder, nombre d'entrées, version. L'API de vMix ne donne ni
+images perdues, ni débit, ni entrées en erreur (documentation vMix, module
+vMix de Companion, demande ouverte sur le forum vMix en décembre 2025) :
+
+- le débit sortant est celui des cartes réseau, déjà mesuré par la sonde ;
+- les images perdues sont cherchées (motif `Dropped: N`) dans le dernier
+  journal de `C:\ProgramData\vMix\streaming`, emplacement rapporté par un
+  utilisateur du forum, pas par vMix. La dernière ligne du journal part
+  telle quelle (`log`) pour vérifier le format sur un vrai poste ;
+- l'arrêt du stream (`stopped_at`) et les images perdues depuis la mesure
+  d'avant (`dropped_new`) se suivent dans `vmix-etat.json`, 10 minutes.
+
+vMix fermé : la mesure ne porte pas `vmix`, sauf dans les 10 minutes après
+un stream (« vMix fermé »). Le Web Controller de vMix doit être actif (il
+l'est par défaut) ; avec un mot de passe, cocher l'accès des applications du
+même ordinateur.
+
+Test de sortie : action `diagnostic` avec `sortie: { protocole: rtmp |
+rtmps | srt, hote, port }` (et `prevu_mbps`). AVDiagram ne transmet que le
+point d'entrée, jamais la clé de stream. `agent/diagnostic.ps1` fait 10
+poignées de main RTMP (C0+C1, S0+S1, C2, S2, puis fermeture : rien n'est
+publié), en TLS pour RTMPS, ou 20 demandes d'induction SRT (UDP, 64
+octets), et rend réponses, perte, latence, gigue. Le débit montant est
+mesuré vers Cloudflare dans le même diagnostic : une plateforme ne se teste
+pas en débit sans diffuser. Protocole vérifié contre libsrt 1.5.3
+(`srt-live-transmit` en listener) et un serveur RTMP ffmpeg ; essai Windows
+PowerShell 5.1 : `agent/essai-direct.ps1` (workflow Direct).
+
 ## Console régie locale (site sans internet, lot 1)
 
 Sur un site sans internet, les postes ne joignent plus AVDiagram ni
@@ -509,7 +544,8 @@ Companion :
    (`http://127.0.0.1:8000` s'il tourne sur le même PC).
 2. Dans Companion, Variables personnalisées : créer les variables listées
    sur la page (`pn_resume`, `pn_etat`, `pn_alertes`, `pn_hors_ligne`, et par
-   poste `pn_pn09_etat`, `pn_pn09_texte`, `pn_pn09_cpu`). Je ne peux pas
+   poste `pn_pn09_etat`, `pn_pn09_texte`, `pn_pn09_cpu`, `pn_pn09_vmix` ;
+   `pn_live` compte les postes en stream). Je ne peux pas
    confirmer qu'une variable absente est créée par l'API : la page affiche le
    refus de Companion si c'est le cas.
 3. Sur un bouton : texte `$(custom:pn_pn09_texte)`, retour interne
