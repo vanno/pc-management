@@ -47,7 +47,7 @@ from .sync import process
 
 SOURCE = "pc-management"
 RESULT_MAX = 4000
-ACTIONS = ("inventaire", "logiciels", "alimentation", "reseau", "mode_evenement", "supervision", "envoi", "nettoyage", "diagnostic", "fond", "vignette", "message")
+ACTIONS = ("inventaire", "logiciels", "alimentation", "reseau", "mode_evenement", "supervision", "envoi", "nettoyage", "diagnostic", "fond", "vignette", "message", "mot_de_passe")
 
 
 def load_software(profile_path, installers_path, installers_dir, avd=None):
@@ -381,6 +381,8 @@ class Service:
             return pilot.thumbnail(self.mesh, device.id, task.get("unit_id") or "", params, self.avd, inv.new_nonce)
         if action == "message":
             return pilot.message(self.mesh, device.id, device.name, params, inv.new_nonce, script=self.pilot_script)
+        if action == "mot_de_passe":
+            return self.password(device, task, params)
         if action == "nettoyage":
             done = pilot.cleanup(self.mesh, device.id, params, inv.new_nonce, script=self.pilot_script)
             return self._checked(device, action, params, done)
@@ -398,6 +400,20 @@ class Service:
         if action == "logiciels":
             return self.install_profile(device, tag, scheduled=scheduled)
         return self.inventory(device, tag)
+
+    def password(self, device: Device, task: dict, params: dict) -> tuple:
+        """Le mot de passe est lu dans AVDiagram au dernier moment, pour cette
+        tâche en cours seulement, et ne passe ni par la base du relais ni par
+        son journal."""
+        secret = None
+        if params.get("secret_id"):
+            try:
+                secret = self.avd.get_secret(task.get("id") or "")
+            except AvdError as exc:
+                return False, _short(f"Mot de passe illisible dans AVDiagram : {exc}")
+        done = pilot.password(self.mesh, device.id, params, secret, inv.new_nonce)
+        ok, text, controle = done
+        return (ok, _short(text), controle) if controle else (ok, _short(text))
 
     def _event_refusal(self, device: Device) -> str | None:
         """Un poste en mode événement ne reçoit pas d'installation. Un poste qui

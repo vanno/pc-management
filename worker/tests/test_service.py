@@ -85,6 +85,14 @@ class FakeMesh:
                 return pnpl_reply(nonce, op="evenement", ok=True, detail="mode événement actif : écran « Mode événement »", fond_a_poser=True)
             if params["op"] == "nettoyage" and self.cleanup_without_app_list:
                 return pnpl_reply(nonce, op="nettoyage", ok=False, partiel=True, detail="profil appliqué : Production, 6 service(s) et 3 tâche(s) coupés, 4 réglages posés, 0 application(s) retirée(s). Applications pas retirées : Windows refuse d'en donner la liste (Accès refusé)")
+            if params["op"] == "cle":
+                from cryptography.hazmat.primitives.asymmetric import rsa
+
+                self.rsa = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+                pn = self.rsa.public_key().public_numbers()
+                return pnpl_reply(nonce, op="cle", ok=True, n=base64.b64encode(pn.n.to_bytes(256, "big")).decode(), e=base64.b64encode(pn.e.to_bytes(3, "big")).decode())
+            if params["op"] == "mot_de_passe":
+                return pnpl_reply(nonce, op="mot_de_passe", ok=True, detail="mot de passe de PN 1 changé", points=[{"nom": "Mot de passe", "ok": True, "constat": "PN 1 : accepté par Windows"}])
             if params["op"] == "fond":
                 return pnpl_reply(nonce, op="fond", ok=True, detail="fond d'état posé. Session de vannh : affiché sur 1 écran(s)", points=[])
             return pnpl_reply(nonce, op=params["op"], ok=True, detail="mode événement actif")
@@ -127,6 +135,10 @@ class FakeAvd:
         self.heartbeats.append({"source": source, "devices": devices, "limit": limit, **({"tool": tool} if tool else {})})
         taken, self.queue = self.queue[:limit], self.queue[limit:]
         return taken
+
+    def get_secret(self, task_id):
+        self.secrets = getattr(self, "secrets", []) + [task_id]
+        return "Regie-2026!"
 
     def finish_task(self, task_id, ok, result, controle=None):
         self.finished.append((task_id, ok, result))
@@ -513,6 +525,17 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(mesh.messages, [("boite", "node//pn01", "-- urgent", "Régie")])
         self.assertTrue(avd.finished[1][1])
         self.assertFalse(avd.finished[2][1])
+
+    def test_password_is_read_late_and_never_logged(self):
+        mesh = FakeMesh([PN01])
+        avd = FakeAvd([{**task(action="mot_de_passe", id="p1"), "params": {"compte": "", "auto": True, "secret_id": "s1"}}])
+        svc = self.service(mesh, avd)
+        svc.tick()
+        self.assertEqual(avd.secrets, ["p1"])
+        self.assertEqual([o["op"] for o in mesh.pilot_ops], ["cle", "mot_de_passe"])
+        self.assertTrue(avd.finished[0][1])
+        self.assertEqual(avd.controles[0]["etat"], "verifie")
+        self.assertNotIn("Regie-2026!", " ".join(self.logs) + json.dumps(mesh.pilot_ops) + json.dumps(avd.finished))
 
     def test_message_toast_outside_event_mode(self):
         mesh = FakeMesh([PN01])

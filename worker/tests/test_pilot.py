@@ -629,3 +629,63 @@ class AgentScriptTests(unittest.TestCase):
         self.assertIn("Refusé par Windows", corps)
         # Une erreur imprévue dit sa ligne et sa commande.
         self.assertIn("pilote.ps1, ligne $($i.ScriptLineNumber)", pilote)
+
+
+class PasswordTests(unittest.TestCase):
+    def key(self):
+        try:
+            from cryptography.hazmat.primitives.asymmetric import rsa
+        except ImportError:  # pragma: no cover
+            self.skipTest("cryptography absent")
+        k = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        pn = k.public_key().public_numbers()
+        return k, {"ok": True, "n": base64.b64encode(pn.n.to_bytes(256, "big")).decode(), "e": base64.b64encode(pn.e.to_bytes(3, "big")).decode()}
+
+    def decrypt(self, k, chiffre):
+        from cryptography.hazmat.primitives import hashes
+        from cryptography.hazmat.primitives.asymmetric import padding
+
+        return k.decrypt(base64.b64decode(chiffre), padding.OAEP(mgf=padding.MGF1(hashes.SHA1()), algorithm=hashes.SHA1(), label=None)).decode("utf-8")
+
+    def test_password_travels_encrypted_for_the_poste_key(self):
+        k, cle = self.key()
+        reply = {"ok": True, "detail": "mot de passe de PN 9 changé, ouverture automatique activée", "points": [{"nom": "Mot de passe", "ok": True, "constat": "PN 9 : accepté par Windows"}]}
+        mesh = FakeMesh({"cle": [cle], "mot_de_passe": [reply]})
+        captured = []
+        real = mesh.run_powershell
+        mesh.run_powershell = lambda d, c, timeout=None: (captured.append(c), real(d, c, timeout))[1]
+        ok, text, controle = pilot.password(mesh, "n", {"compte": "", "auto": True, "secret_id": "x"}, "Régie-2026!", nonces())
+        self.assertTrue(ok)
+        self.assertEqual(text, "Mot de passe de PN 9 changé, ouverture automatique activée")
+        self.assertEqual(controle["etat"], "verifie")
+        body = mesh.calls[1][0]
+        self.assertEqual((body["op"], body["compte"], body["auto"]), ("mot_de_passe", "", True))
+        self.assertEqual(self.decrypt(k, body["chiffre"]), "Régie-2026!")
+        for c in captured:
+            self.assertNotIn("Régie-2026!", c)
+            self.assertNotIn(base64.b64encode("Régie-2026!".encode()).decode(), c)
+
+    def test_turning_auto_off_needs_no_password_nor_key(self):
+        mesh = FakeMesh({"mot_de_passe": [{"ok": True, "detail": "ouverture automatique coupée", "points": [{"nom": "Ouverture automatique", "ok": True, "constat": "coupée"}]}]})
+        ok, text, _ = pilot.password(mesh, "n", {"compte": "PN UK", "auto": False}, None, nonces())
+        self.assertTrue(ok)
+        self.assertEqual([c[0]["op"] for c in mesh.calls], ["mot_de_passe"])
+        self.assertNotIn("chiffre", mesh.calls[0][0])
+
+    def test_refusals(self):
+        mesh = FakeMesh({})
+        self.assertFalse(pilot.password(mesh, "n", {"auto": True}, None, nonces())[0])
+        self.assertFalse(pilot.password(mesh, "n", {"compte": "a/b"}, "longmotdepasse", nonces())[0])
+        self.assertFalse(pilot.password(mesh, "n", {}, "court", nonces())[0])
+        self.assertEqual(mesh.calls, [])
+
+    def test_pilote_never_returns_the_password(self):
+        pilote = pilot.PASSWORD_SCRIPT.read_text(encoding="utf-8")
+        body = pilote.split("function Set-MotDePasse", 1)[1].split("\n}\n", 1)[0]
+        self.assertNotRegex(body, r"\$result\.\w+\s*=\s*\$secret")
+        self.assertIn("$secret = $null", body)
+        self.assertIn("Remove-ItemProperty -Path $cleWinlogon -Name DefaultPassword", body)
+
+    def test_password_script_fits_the_command_line(self):
+        cmd = pilot.build_command({"op": "mot_de_passe", "compte": "PN 9", "auto": True, "chiffre": "A" * 344}, "00ff", pilot.PASSWORD_SCRIPT.read_text(encoding="utf-8"))
+        self.assertLess(len(cmd), 18_000)
