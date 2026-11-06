@@ -678,8 +678,6 @@ function Enable-Nettoyage([bool]$Applications) {
     Write-Utf8 $fichierNettoyage ($etat | ConvertTo-Json -Depth 6)
 
     $plan = Set-PlanProduction $etat
-    # Le plan choisi est gardé : le contrôle le relit, le retour le supprime.
-    Write-Utf8 $fichierNettoyage ($etat | ConvertTo-Json -Depth 6)
     # Chaque refus de Windows est nommé, et le reste s'applique quand même.
     $refus = @()
     $services = 0
@@ -693,9 +691,20 @@ function Enable-Nettoyage([bool]$Applications) {
         try { Disable-ScheduledTask -TaskPath $t.Substring(0, $i + 1) -TaskName $t.Substring($i + 1) -ErrorAction Stop | Out-Null; $taches++ } catch { $refus += "tâche $($t.Substring($i + 1))" }
     }
     $reglages = 0
+    $etat.proteges = @()
     foreach ($r in $reglagesNettoyage) {
-        try { Set-Valeur $r[0] $r[1] $r[2] 'DWord'; $reglages++ } catch { $refus += "réglage $($r[1]) ($($_.Exception.Message))" }
+        try { Set-Valeur $r[0] $r[1] $r[2] 'DWord'; $reglages++ }
+        catch {
+            # Windows 11 protège certaines clés par son pilote UCPD, même contre
+            # SYSTEM qui a tous les droits dessus (AllowNewsAndInterests sur PN09,
+            # le 2026-11-05) : le réglage reste à Windows, et le contrôle le sait.
+            if ($_.Exception -is [UnauthorizedAccessException] -and (Get-Service UCPD -ErrorAction SilentlyContinue).Status -eq 'Running') { $etat.proteges += $r[1] }
+            else { $refus += "réglage $($r[1]) ($($_.Exception.Message))" }
+        }
     }
+    # Le plan choisi et les réglages protégés sont gardés : le contrôle les
+    # relit, le retour supprime le plan.
+    Write-Utf8 $fichierNettoyage ($etat | ConvertTo-Json -Depth 6)
     $retirees = @()
     $sansListe = $null
     if ($Applications) {
@@ -722,6 +731,7 @@ function Enable-Nettoyage([bool]$Applications) {
     $txt = "profil appliqué : $plan, $services service(s) et $taches tâche(s) coupés, $reglages réglages posés"
     if ($Applications) { $txt += ", $(@($result.applications).Count) application(s) retirée(s)" }
     if ($sansListe) { $txt += ". Applications pas retirées : Windows refuse d'en donner la liste ($sansListe)" }
+    if ($etat.proteges.Count) { $txt += ". Laissé à Windows, qui le protège (pilote UCPD actif) : $($etat.proteges -join ', ')" }
     if ($refus.Count) { $txt += ". Refusé par Windows : $($refus -join ', ')" }
     $result.detail = $txt + '. Le démarrage rapide est coupé : effet complet au prochain redémarrage'
 }
