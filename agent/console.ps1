@@ -180,7 +180,7 @@ foreach ($c in @($conf.consoles)) {
         if ($retenue) { break }
     }
     $etat = 'injoignable'
-    if ($code -eq 200) { $etat = 'ok' } elseif ($code -eq 401) { $etat = 'jeton refusé' } elseif ($code) { $etat = "HTTP $code" }
+    if ($code -eq 200) { $etat = 'ok' } elseif ($code -eq 401) { $etat = 'jeton_refuse' } elseif ($code) { $etat = "HTTP $code" }
     $vu[$id] = [ordered]@{ nom = [string]$c.nom; adresse = $(if ($code -eq 200) { $retenue } else { $null }); etat = $etat; par = $par; erreur = $erreur; le = $maintenant }
 }
 

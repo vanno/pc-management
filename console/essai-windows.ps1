@@ -1,4 +1,4 @@
-<#
+﻿<#
   Essai de bout en bout sous Windows PowerShell 5.1 (GitHub Actions, ou à la
   main sur un PC) : la console régie construite (console-regie.exe), et la
   partie poste (agent/console.ps1, agent/supervision.ps1) telle qu'elle
@@ -83,7 +83,7 @@ try {
     [IO.File]::WriteAllText((Join-Path $sonde 'console.json'), ($c | ConvertTo-Json -Depth 4), (New-Object Text.UTF8Encoding $false))
     & (Join-Path $sonde 'console.ps1') -Mesure $m
     $v = Read-Vu
-    Test-Point 'jeton d''un autre poste refusé' ($v.etat -eq 'jeton refusé') "$($v.etat) $($v.erreur)"
+    Test-Point 'jeton d''un autre poste refusé' ($v.etat -eq 'jeton_refuse') "$($v.etat) $($v.erreur)"
 
     # 5. Découverte, sans adresse fixée (le réseau d'un exécuteur GitHub n'est pas un LAN de site : avertissement seulement)
     Set-Console 'PNESSAI' $app.empreinte $null

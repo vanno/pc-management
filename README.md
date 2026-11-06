@@ -484,7 +484,7 @@ Pour un Companion sur un autre appareil qui lit plutôt que de recevoir :
 Côté poste, `agent/console.ps1` est posé par `agent/console-pose.ps1` dans
 le dossier de la sonde, juste après elle. Son état est dans
 `C:\ProgramData\PointeNoire\supervision\console-vue.json` (dernière
-adresse, ok, injoignable, jeton refusé). Une panne de la console ne change
+adresse, ok, injoignable, jeton_refuse). Une panne de la console ne change
 rien à l'envoi vers AVDiagram.
 
 Limites du lot 1 : lecture seule (les actions signées sont le lot 2), pas de
