@@ -5,6 +5,10 @@
                       (ce qui manque du catalogue, et les mises à jour) sur les
                       postes en ligne. Un poste en mode événement est laissé tel
                       quel : sa tâche se termine « ignorée », pas en échec.
+    PCM_DEFER_AT      « lun 05:00 » : chaque semaine, le report des postes du
+                      parc derrière le pilote reposé (mises à jour par
+                      étapes) : la pause de Windows Famille dure 8 jours.
+                      Un poste sans report choisi n'y change rien.
     PCM_TZ            le fuseau de ces heures, Europe/Paris par défaut
 
 « off » ou vide coupe une planification. Les tâches passent par la file

@@ -128,9 +128,10 @@ class FakeAvd:
         taken, self.queue = self.queue[:limit], self.queue[limit:]
         return taken
 
-    def finish_task(self, task_id, ok, result, controle=None):
+    def finish_task(self, task_id, ok, result, controle=None, donnees=None):
         self.finished.append((task_id, ok, result))
         self.controles.append(controle)
+        self.donnees = getattr(self, "donnees", []) + [donnees]
         return not self.expired
 
     def computers(self):
@@ -409,6 +410,25 @@ class ServiceTests(unittest.TestCase):
         self.assertFalse(ok)
         self.assertIn("mode événement", result)
         self.assertEqual(mesh.packages, [])
+
+    def test_updates_refused_in_event_mode(self):
+        mesh = FakeMesh([PN01])
+        mesh.event = True
+        avd = FakeAvd([{**task(action="mises_a_jour"), "params": {"op": "appliquer", "logiciels": [{"id": "VideoLAN.VLC", "version": "3.0.21"}]}}])
+        self.service(mesh, avd, profile_path=self.profile(["VideoLAN.VLC"])).tick()
+        (_, ok, result), = avd.finished
+        self.assertFalse(ok)
+        self.assertIn("mode événement", result)
+        self.assertEqual([o["op"] for o in mesh.pilot_ops], ["etat"])
+        self.assertEqual(avd.donnees, [{"reporte": "mode_evenement"}])
+
+    def test_updates_survey_sends_catalogue_and_data(self):
+        mesh = FakeMesh([PN01])
+        avd = FakeAvd([{**task(action="mises_a_jour"), "params": {"op": "releve"}}])
+        self.service(mesh, avd, profile_path=self.profile(["VideoLAN.VLC"])).tick()
+        self.assertEqual(mesh.pilot_ops[0], {"op": "releve", "logiciels": ["VideoLAN.VLC"]})
+        self.assertIn("PointeNoire-MiseAJour", mesh.pilot_scripts[0])
+        self.assertIsNotNone(avd.donnees[0])
 
     def test_event_mode_task(self):
         mesh = FakeMesh([PN01])
