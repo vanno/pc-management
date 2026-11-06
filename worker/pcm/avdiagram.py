@@ -10,6 +10,7 @@ rôle de son propriétaire, qui doit avoir le droit parc:ecrire.
 from __future__ import annotations
 
 import json
+import re
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -146,6 +147,16 @@ class AvdClient:
         """Un script approuvé ou un fichier de la bibliothèque d'envois (0075).
         Le fichier porte une adresse de téléchargement signée."""
         return self._request("GET", f"/api/v1/postes/envois/{envoi_id}")
+
+    def get_secret(self, task_id: str) -> str:
+        """Le mot de passe d'une tâche `mot_de_passe` en cours : AVDiagram ne le
+        rend qu'au relais, et seulement tant que la tâche est en cours."""
+        if not re.fullmatch(r"[A-Za-z0-9-]{1,64}", task_id or ""):
+            raise AvdError("Identifiant de tâche illisible.")
+        value = self._request("GET", f"/api/v1/postes/taches/{task_id}/secret").get("password")
+        if not isinstance(value, str) or not value:
+            raise AvdError("AVDiagram n'a pas rendu de mot de passe.")
+        return value
 
     def finish_task(self, task_id: str, ok: bool, result: str, controle: dict | None = None) -> bool:
         """Rend le résultat d'une tâche, et ce que le contrôle a relu dans

@@ -15,6 +15,9 @@
                     plan d'alimentation, services et tâches inutiles,
                     réglages de télémétrie et de jeu ; applications Windows
                     inutiles en option (lot 6)
+    mot_de_passe    change le mot de passe d'un compte local et règle
+                    l'ouverture de session automatique (agent/motdepasse.ps1) ;
+                    le mot de passe voyage chiffré pour la clé du poste
 
 Tout passe par `agent/pilote.ps1`, envoyé au poste comme l'inventaire
 (`meshctrl runcommand --powershell --reply`, compte SYSTEM), sauf le réveil :
@@ -55,6 +58,7 @@ SURVEY_SCRIPT = Path(__file__).resolve().parents[2] / "agent" / "releve.ps1"
 SURVEY_INSTALLER = Path(__file__).resolve().parents[2] / "agent" / "releve-pose.ps1"
 THUMBNAIL_SCRIPT = Path(__file__).resolve().parents[2] / "agent" / "vignette.ps1"
 THUMBNAIL_INSTALLER = Path(__file__).resolve().parents[2] / "agent" / "vignette-pose.ps1"
+PASSWORD_SCRIPT = Path(__file__).resolve().parents[2] / "agent" / "motdepasse.ps1"
 CHECK_SCRIPT = Path(__file__).resolve().parents[2] / "agent" / "controle.ps1"
 # L'envoi à la console régie locale, posé dans le dossier de la sonde.
 CONSOLE_SCRIPT = Path(__file__).resolve().parents[2] / "agent" / "console.ps1"
@@ -707,3 +711,87 @@ def slim_fingerprints() -> dict[str, str]:
 if __name__ == "__main__":
     for name, fingerprint in slim_fingerprints().items():
         print(f"{fingerprint}  {name}")
+
+
+# --- Mots de passe -------------------------------------------------------------------
+
+ACCOUNT_RE = re.compile(r"^[^\"/\\\[\]:;|=,+*?<>@\x00-\x1f]{1,20}$")
+PASSWORD_MIN = 8
+PASSWORD_MAX = 127  # la limite de Windows pour un compte local
+
+
+def _mgf1(seed: bytes, length: int) -> bytes:
+    out = b""
+    counter = 0
+    while len(out) < length:
+        out += hashlib.sha1(seed + counter.to_bytes(4, "big")).digest()
+        counter += 1
+    return out[:length]
+
+
+def oaep_encrypt(modulus: bytes, exponent: bytes, message: bytes, rand: Callable[[int], bytes] | None = None) -> bytes:
+    """RSA-OAEP (SHA-1, MGF1-SHA-1, RFC 8017), ce que lit
+    RSACryptoServiceProvider.Decrypt(…, $true) de Windows PowerShell 5.1. Sans
+    dépendance : l'image du relais n'embarque que la bibliothèque standard."""
+    import secrets as _secrets
+
+    rand = rand or _secrets.token_bytes
+    n = int.from_bytes(modulus, "big")
+    e = int.from_bytes(exponent, "big")
+    k = (n.bit_length() + 7) // 8
+    if k < 128 or e < 3:
+        raise PilotError("Clé du poste trop courte ou illisible.")
+    h = 20
+    if len(message) > k - 2 * h - 2:
+        raise PilotError("Mot de passe trop long pour la clé du poste.")
+    db = hashlib.sha1(b"").digest() + b"\x00" * (k - len(message) - 2 * h - 2) + b"\x01" + message
+    seed = rand(h)
+    masked_db = bytes(a ^ b for a, b in zip(db, _mgf1(seed, k - h - 1)))
+    masked_seed = bytes(a ^ b for a, b in zip(seed, _mgf1(masked_db, h)))
+    em = int.from_bytes(b"\x00" + masked_seed + masked_db, "big")
+    return pow(em, e, n).to_bytes(k, "big")
+
+
+def password(
+    mesh: MeshCtrl,
+    device_id: str,
+    params: dict,
+    secret: str | None,
+    new_nonce: Callable[[], str],
+    script: str | None = None,
+) -> tuple[bool, str, dict | None]:
+    """Change le mot de passe d'un compte local et règle l'ouverture de session
+    automatique. Le mot de passe (lu dans AVDiagram par le relais, juste avant)
+    est chiffré avec la clé du poste, demandée dans la même tâche : la commande
+    MeshCentral ne porte que du chiffré, la réponse ne le porte pas du tout."""
+    account = params.get("compte") or ""
+    auto = params.get("auto")
+    if account and (not isinstance(account, str) or not ACCOUNT_RE.match(account)):
+        return False, "Nom de compte refusé.", None
+    if auto not in (True, False, None):
+        return False, "Ouverture automatique : vrai, faux ou rien.", None
+    if secret is None and auto is not False:
+        return False, "Rien à faire : ni mot de passe, ni ouverture automatique à couper.", None
+    if secret is not None and not (PASSWORD_MIN <= len(secret) <= PASSWORD_MAX):
+        return False, f"Mot de passe de {PASSWORD_MIN} à {PASSWORD_MAX} caractères.", None
+    script = script or PASSWORD_SCRIPT.read_text(encoding="utf-8")
+    body: dict = {"op": "mot_de_passe", "compte": account}
+    if auto is not None:
+        body["auto"] = auto
+    try:
+        if secret is not None:
+            key = call(mesh, device_id, {"op": "cle"}, new_nonce, script=script)
+            if not key.get("ok"):
+                return False, f"Clé du poste illisible : {key.get('detail') or 'sans explication'}", None
+            try:
+                n, e = base64.b64decode(key.get("n") or "", validate=True), base64.b64decode(key.get("e") or "", validate=True)
+            except binascii.Error:
+                return False, "Clé du poste illisible.", None
+            body["chiffre"] = base64.b64encode(oaep_encrypt(n, e, secret.encode("utf-8"))).decode("ascii")
+        reply = call(mesh, device_id, body, new_nonce, script=script)
+    except (MeshError, PilotError) as exc:
+        return False, str(exc), None
+    detail = str(reply.get("detail") or "")
+    text = detail[:1].upper() + detail[1:] if detail else "Sans réponse lisible du poste."
+    controle = verdict(reply.get("points")) if reply.get("points") else None
+    return bool(reply.get("ok")), text, controle

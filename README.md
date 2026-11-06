@@ -130,6 +130,27 @@ revenir à une version précise : `PCM_IMAGE=ghcr.io/vanno/pc-management:<commit
 dans `.env`, puis `docker compose up -d pcm-service`. `docker compose build`
 reste possible pour un essai local.
 
+## Mots de passe et ouverture de session automatique
+
+« Changer le mot de passe » (page Postes, administrateurs) change le mot de
+passe d'un compte local et active ou coupe l'ouverture de session automatique
+(`agent/motdepasse.ps1`, migration 0088 d'AVDiagram). Sans compte précisé, le
+poste prend son compte principal : celui de l'ouverture automatique, sinon de
+la session ouverte, sinon le seul compte local actif ; s'il y en a plusieurs,
+il refuse. Un compte Microsoft est refusé : son mot de passe se change en
+ligne.
+
+Le chemin du mot de passe : AVDiagram le garde chiffré (AES-256-GCM, clé
+`AVD_CLE_SECRETS` sur Vercel). Le relais le lit au dernier moment
+(`GET /api/v1/postes/taches/{id}/secret`, seulement tant que la tâche est en
+cours), demande au poste sa clé publique (paire RSA 2048 dans le magasin de
+clés de la machine, conteneur `PointeNoire-Relais`) et l'envoie chiffré en
+RSA-OAEP. La commande MeshCentral, le journal du relais et la réponse du poste
+ne le portent jamais en clair. L'ouverture automatique le range comme Windows
+(secret LSA `DefaultPassword`) et retire toute valeur `DefaultPassword` en
+clair du registre. La tâche relit le mot de passe auprès de Windows et
+l'ouverture automatique avant de se dire faite.
+
 ## Diagnostic réseau et réseaux du parc
 
 « Diagnostic réseau » (page Postes) lance `agent/diagnostic.ps1` sur le poste,
