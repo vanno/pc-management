@@ -21,6 +21,7 @@
 param([int]$Delai = 1500)
 
 $ErrorActionPreference = 'Stop'
+$script:erreurHttp = $null
 # D'une mesure à l'autre : le stream était-il actif, quand s'est-il arrêté,
 # combien d'images perdues au dernier relevé.
 $fichierEtat = Join-Path $PSScriptRoot 'vmix-etat.json'
@@ -60,7 +61,13 @@ function Read-Http {
         $q.ReadWriteTimeout = $Delai
         $rep = $q.GetResponse()
         try { return (New-Object IO.StreamReader($rep.GetResponseStream(), [Text.Encoding]::UTF8)).ReadToEnd() } finally { $rep.Close() }
-    } catch { return $null }
+    } catch {
+        # La raison remonte dans « detail » si le port TCP ne répond pas non plus.
+        $m = $_.Exception
+        while ($m.InnerException) { $m = $m.InnerException }
+        $script:erreurHttp = $m.Message
+        return $null
+    }
 }
 
 function Read-Tcp {
@@ -137,7 +144,7 @@ $v = [ordered]@{ ok = $false; running = $true; source = $null }
 $r = $null
 if ($brut) { try { $r = ([xml]$brut).SelectSingleNode('/vmix') } catch { $r = $null } }
 if (-not $r) {
-    $v.detail = $(if ($brut) { 'réponse de vMix illisible' } else { 'vMix lancé mais son API ne répond pas (Web Controller coupé ou accès refusé)' })
+    $v.detail = $(if ($brut) { 'réponse de vMix illisible' } else { 'vMix lancé mais son API ne répond pas (Web Controller coupé ou accès refusé)' + $(if ($script:erreurHttp) { ' : ' + $script:erreurHttp.Substring(0, [Math]::Min(120, $script:erreurHttp.Length)) } else { '' }) })
     # Sans lecture, l'état du stream d'avant est gardé tel quel.
     $v.stopped_at = Get-Arret $false
     return $v
