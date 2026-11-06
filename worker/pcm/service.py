@@ -48,6 +48,10 @@ from .sync import process
 SOURCE = "pc-management"
 RESULT_MAX = 4000
 ACTIONS = ("inventaire", "logiciels", "alimentation", "reseau", "mode_evenement", "supervision", "envoi", "nettoyage", "diagnostic", "fond", "vignette", "message")
+# Ce que les actions savent faire de plus que leur première version : la page
+# Postes ne propose les profils réseau (carte filaire ou Wi-Fi choisie sur le
+# poste, retour programmé, retour au réseau normal) qu'à un outil qui les annonce.
+CAPABILITIES = ("reseau_profils",)
 
 
 def load_software(profile_path, installers_path, installers_dir, avd=None):
@@ -131,7 +135,7 @@ class Service:
         self.clock = clock
         # Les actions que cette version sait faire : AVDiagram grise les autres
         # au lieu de laisser partir une tâche vouée à l'échec.
-        self.tool: dict = {"actions": list(ACTIONS)}
+        self.tool: dict = {"actions": list(ACTIONS), "capacites": list(CAPABILITIES)}
         self._version_at: datetime | None = None
         self._plan_failed: dict[str, datetime] = {}
         self._repose_failed: dict[str, datetime] = {}

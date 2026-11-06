@@ -3,6 +3,7 @@ import gzip
 import json
 import re
 import unittest
+from datetime import datetime, timedelta, timezone
 
 from pcm import pilot
 from pcm.meshctrl import MeshError
@@ -138,6 +139,28 @@ class NetworkParamsTests(unittest.TestCase):
                 pilot.parse_network(bad)
 
 
+class NetworkProfileTests(unittest.TestCase):
+    NOW = datetime(2026, 11, 6, 17, 0, tzinfo=timezone.utc)
+
+    def test_card_by_kind_and_until(self):
+        n = pilot.parse_network({"interface": "@filaire", "dhcp": False, "ip": "192.168.10.21", "prefixe": 24, "retour": False, "fin": "2026-11-07T23:00:00+01:00"}, now=self.NOW)
+        self.assertEqual((n.interface, n.until, n.normal), ("@filaire", "2026-11-07T23:00:00+01:00", False))
+        self.assertEqual(n.label(), "192.168.10.21/24 sur la carte filaire")
+        self.assertTrue(pilot.parse_network({"interface": "@wifi", "dhcp": True, "normal": True}, now=self.NOW).normal)
+
+    def test_until_refusals(self):
+        for bad in (
+            {"interface": "@filaire", "dhcp": True, "fin": "2026-11-06T16:00:00+00:00"},
+            {"interface": "@filaire", "dhcp": True, "fin": "2026-11-07T23:00:00"},
+            {"interface": "@filaire", "dhcp": True, "fin": "2027-01-01T00:00:00+00:00"},
+            {"interface": "@filaire", "dhcp": True, "fin": "demain"},
+            {"interface": "@filaire", "dhcp": True, "normal": True, "fin": "2026-11-07T23:00:00+00:00"},
+            {"interface": "@ethernet", "dhcp": True},
+        ):
+            with self.assertRaises(pilot.PilotError, msg=bad):
+                pilot.parse_network(bad, now=self.NOW)
+
+
 class NetworkFlowTests(unittest.TestCase):
     URL = "wss://meshcentral.pointe-noire.com"
     STATIC = {"interface": "Ethernet", "dhcp": False, "ip": "192.168.10.21", "prefixe": 24, "passerelle": "192.168.10.1"}
@@ -180,6 +203,37 @@ class NetworkFlowTests(unittest.TestCase):
         self.assertFalse(ok)
         self.assertIn("ne répond plus", text)
         self.assertEqual(len(mesh.calls), 1 + pilot.NETWORK_READS)
+
+    def test_profile_reports_the_card_chosen_on_the_device(self):
+        (ok, text), mesh, _ = self.run_flow({
+            "reseau": [{"ok": True, "avant": self.BEFORE, "interface": "Ethernet 2"}],
+            "reseau_resultat": [{"ok": True, "etat": "applique", "detail": "appliqué sans retour automatique ; retour au réseau normal prévu le 07/11 à 23:00",
+                                 "carte": {"dhcp": False, "adresses": [{"ip": "192.168.10.21", "prefixe": 24}]}}],
+        }, params={"interface": "@filaire", "dhcp": False, "ip": "192.168.10.21", "prefixe": 24, "retour": False, "fin": "2099-01-01T00:00:00+00:00"})
+        self.assertFalse(ok)  # date trop lointaine : refusée avant le poste
+        self.assertEqual(mesh.calls, [])
+        future = (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()
+        (ok, text), mesh, _ = self.run_flow({
+            "reseau": [{"ok": True, "avant": self.BEFORE, "interface": "Ethernet 2"}],
+            "reseau_resultat": [{"ok": True, "etat": "applique", "detail": "appliqué sans retour automatique ; retour au réseau normal prévu le 07/11 à 23:00",
+                                 "carte": {"dhcp": False, "adresses": [{"ip": "192.168.10.21", "prefixe": 24}]}}],
+        }, params={"interface": "@filaire", "dhcp": False, "ip": "192.168.10.21", "prefixe": 24, "retour": False, "fin": future})
+        self.assertTrue(ok)
+        self.assertIn("192.168.10.21/24 sur Ethernet 2 appliqué", text)
+        self.assertIn("prévu le 07/11", text)
+        self.assertEqual((mesh.calls[0][0]["interface"], mesh.calls[0][0]["fin"], mesh.calls[0][0]["normal"]), ("@filaire", future, False))
+
+    def test_restore_normal_network(self):
+        (ok, text), mesh, waits = self.run_flow({
+            "reseau_retablir": [{"ok": True}],
+            "reseau_resultat": [MeshError("hors ligne"), {"ok": True, "etat": "revenu", "detail": "réseau normal remis sur Ethernet", "carte": self.BEFORE}],
+        }, params={"retablir": True})
+        self.assertTrue(ok)
+        self.assertIn("Réseau normal remis sur Ethernet", text)
+        self.assertEqual(mesh.calls[0][0], {"op": "reseau_retablir"})
+        (ok, text), _, _ = self.run_flow({"reseau_retablir": [{"ok": True, "rien": True}]}, params={"retablir": True})
+        self.assertTrue(ok)
+        self.assertIn("déjà sur son réseau normal", text)
 
     def test_invalid_params_never_reach_device(self):
         (ok, _), mesh, _ = self.run_flow({}, params={"interface": "Ethernet", "dhcp": False, "ip": "1.2.3.4", "prefixe": 40})

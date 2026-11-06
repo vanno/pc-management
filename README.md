@@ -332,7 +332,19 @@ compressé (gzip puis base64) comme les autres scripts.
   elle remet la configuration d'avant. Le worker relit le résultat une fois
   l'agent revenu (jusqu'à 5 minutes). Sans retour automatique (réseau fermé
   d'une régie), le poste ne répond plus jusqu'à son retour sur un réseau qui
-  joint MeshCentral.
+  joint MeshCentral. Le script de la tâche est `agent/reseau.ps1`, envoyé
+  dans la demande (il n'alourdit pas pilote.ps1).
+- Profils réseau (outil qui annonce la capacité `reseau_profils`) :
+  `interface` vaut `@filaire` ou `@wifi` et la carte est choisie sur le poste
+  (branchée d'abord, puis celle qui porte la route par défaut). Une fois le
+  changement gardé, le poste pose son retour au réseau normal : la tâche
+  `PointeNoire-Reseau-Retour` (SYSTEM, lançable par tout utilisateur
+  connecté), déclenchée à l'heure `fin` si elle est donnée (ou au démarrage
+  suivant si le poste était éteint), et le raccourci « Revenir au réseau
+  normal » sur le bureau commun. Le réseau normal est celui d'avant le premier
+  changement (`reseau\base.json`), même après plusieurs profils de suite.
+  `normal: true` dit que la demande *est* le réseau normal : le retour
+  s'efface. `retablir: true` lance ce retour à distance.
 
 ### Contrôle : l'effet réel, relu dans Windows
 
