@@ -487,6 +487,17 @@ le dossier de la sonde, juste après elle. Son état est dans
 adresse, ok, injoignable, jeton_refuse). Une panne de la console ne change
 rien à l'envoi vers AVDiagram.
 
+Le PC régie et les postes doivent être sur le même réseau, pas seulement
+dans la même plage d'adresses. Essai du 06/11 : PC de Vannh à la maison en
+192.168.1.44 (passerelle 192.168.1.254), PN09 et PN-UK au bureau en
+192.168.1.34 et .42 (passerelle 192.168.1.1). Même plage, deux réseaux :
+aucune mesure n'arrive. Pour vérifier depuis le PC régie :
+`ping <adresse d'un poste>` doit répondre, et sa passerelle (`ipconfig`)
+doit être celle que la page Postes d'AVDiagram montre pour les postes.
+L'adresse de secours de `consoles.json` est l'adresse du PC régie sur ce
+réseau, jamais celle de Tailscale (100.x) : les postes ne la joignent pas.
+La page de la console propose l'adresse du réseau local en premier.
+
 Limites du lot 1 : lecture seule (les actions signées sont le lot 2), pas de
 renvoi du journal à AVDiagram (lot 3). La découverte UDP ne traverse pas un
 routeur : sur un autre réseau, seule l'adresse fixée marche.

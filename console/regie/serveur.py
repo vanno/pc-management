@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import hmac
+import ipaddress
 import json
 import socket
 import ssl
@@ -34,6 +35,18 @@ MESURES_MAX = 20
 NOM_MAX = 60
 
 
+def ordre_adresse(a: str) -> tuple:
+    """Les adresses du LAN du site d'abord (192.168, 10, 172.16-31), un VPN
+    comme Tailscale (100.64.0.0/10) en dernier : les postes ne le joignent pas."""
+    try:
+        ip = ipaddress.IPv4Address(a)
+    except ValueError:
+        return (3, a)
+    if ip in ipaddress.IPv4Network("100.64.0.0/10"):
+        return (2, a)
+    return (0 if ip.is_private else 1, tuple(int(x) for x in a.split(".")))
+
+
 def adresses_locales() -> list[str]:
     vues = set()
     try:
@@ -49,7 +62,7 @@ def adresses_locales() -> list[str]:
         s.close()
     except OSError:
         pass
-    return sorted(a for a in vues if not a.startswith("127.") and not a.startswith("169.254."))
+    return sorted((a for a in vues if not a.startswith("127.") and not a.startswith("169.254.")), key=ordre_adresse)
 
 
 class Console:
@@ -80,7 +93,7 @@ class Console:
         vues = sorted({p["console_ip"] for p in self.store.postes() if p.get("console_ip") and not p["console_ip"].startswith("127.")})
         out = {
             "nom": self.ident.nom, "id": self.ident.id, "version": VERSION, "empreinte": self.ident.empreinte,
-            "adresses": sorted(set(ips) | set(vues)), "port_https": self.port_https, "port_local": self.port_local, "port_udp": self.port_udp,
+            "adresses": sorted(set(ips) | set(vues), key=ordre_adresse), "port_https": self.port_https, "port_local": self.port_local, "port_udp": self.port_udp,
             "depuis": self.demarre, "recues": self.recues, "refusees": self.refusees, "local": local,
             "companion": dict(self.companion.etat), "companion_url": self.ident.reglages.get("companion_url", ""),
         }
