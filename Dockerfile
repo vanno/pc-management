@@ -25,7 +25,8 @@ ENV PYTHONPATH=/app/worker \
     PCM_MAPPING=/config/mapping.json \
     PCM_SOFTWARE=/config/logiciels.json \
     PCM_INSTALLERS=/config/installeurs.json \
-    PCM_INSTALLERS_DIR=/installeurs
+    PCM_INSTALLERS_DIR=/installeurs \
+    PCM_CONSOLES=/config/consoles.json
 
 # Le commit de l'image, posé par le workflow : la page Postes l'affiche.
 ARG PCM_VERSION=dev

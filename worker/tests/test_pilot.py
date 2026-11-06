@@ -209,7 +209,10 @@ class SupervisionTests(unittest.TestCase):
         self.assertEqual(text, "Sonde installée : premières mesures dans la minute")
         request = mesh.calls[0][0]
         self.assertEqual((request["url"], request["jeton"]), ("https://avd.example/api/v1/postes/mesures", "pns_" + "a" * 43))
-        self.assertEqual(gzip.decompress(base64.b64decode(request["script"])), pilot.PROBE_SCRIPT.read_bytes())
+        sent = gzip.decompress(base64.b64decode(request["script"])).decode("utf-8")
+        self.assertEqual(sent, pilot.slim(pilot.PROBE_SCRIPT.read_text(encoding="utf-8-sig")))
+        self.assertIn("Send-Regie", sent)
+        self.assertNotIn("Une panne de la console", sent)
         self.assertEqual(avd.calls, [("create", "u1")])
         cmd = pilot.build_command(request, "ab12")
         self.assertLess(len(cmd), 24_000)

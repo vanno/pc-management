@@ -366,7 +366,7 @@ class Service:
         if action == "alimentation":
             return pilot.power(self.mesh, device.id, params, inv.new_nonce, script=self.pilot_script)
         if action == "supervision":
-            done = pilot.supervision(self.mesh, device.id, task.get("unit_id") or "", params, self.avd, inv.new_nonce, script=self.pilot_script)
+            done = pilot.supervision(self.mesh, device.id, task.get("unit_id") or "", params, self.avd, inv.new_nonce, script=self.pilot_script, reference=tag)
             return self._checked(device, action, params, done)
         if action == "envoi":
             ok, text = pilot.envoi(self.mesh, device.id, params, self.avd, inv.new_nonce, script=self.pilot_script)

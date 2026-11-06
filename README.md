@@ -399,6 +399,98 @@ l'intervalle, et une carte filaire tombée depuis moins de 10 minutes
 switchs non manageables (GS105), c'est le seul regard sur le câble. Un poste
 déjà supervisé reçoit cette sonde au prochain « Superviser ».
 
+## Console régie locale (site sans internet, lot 1)
+
+Sur un site sans internet, les postes ne joignent plus AVDiagram ni
+MeshCentral. La console régie reprend la supervision sur le réseau du site :
+c'est un exécutable Windows (`console-regie.exe`) lancé sur le PC régie. Plan :
+https://claude.ai/artifact/2MBxWMg3x1U5vKYB8vn5Uh. Le lot 1 est en lecture
+seule : santé, réseaux, Companion. Aucune action sur les postes.
+
+Ce qui se passe :
+
+1. Les sondes déjà posées envoient chaque mesure (toutes les 30 s) à la
+   console, en plus d'AVDiagram. Elles la trouvent par une diffusion UDP sur
+   le port 8472, ou à l'adresse fixée à l'avance si la diffusion ne passe
+   pas. Aucune règle de pare-feu sur les postes : seul le PC régie écoute.
+2. L'envoi se fait en HTTPS (port 8471) vers un certificat auto-signé dont
+   l'empreinte est épinglée dans la sonde : un appareil du LAN qui se ferait
+   passer pour la console ne reçoit rien. Chaque poste présente son propre
+   jeton, calculé par le relais du NAS avec le secret de la console : un
+   appareil inconnu ne peut pas écrire de fausses mesures.
+3. La page `http://127.0.0.1:8470/` (ouverte au lancement) montre l'état de
+   chaque poste, ses alertes (processeur, mémoire, disque, passerelle, câble
+   débranché, erreurs réseau), ses courbes des 2 dernières heures, et les
+   réseaux du parc avec les adresses en double et les passerelles qui ne
+   concordent pas. Les mesures des 12 dernières heures restent sur la
+   console (`%LOCALAPPDATA%\PointeNoire\ConsoleRegie`).
+4. Companion (Stream Deck) : la console pousse des variables personnalisées
+   par l'API HTTP de Companion (`POST /api/custom-variable/<nom>/value`).
+
+Mise en place, une fois :
+
+1. Télécharger `console-regie.exe` :
+   https://github.com/vanno/pc-management/releases/latest/download/console-regie.exe
+   (construit et essayé sous Windows PowerShell 5.1 par GitHub à chaque
+   fusion). Il n'est pas signé : SmartScreen demande « Informations
+   complémentaires », « Exécuter quand même ».
+2. Le lancer. Au premier lancement, Windows demande d'autoriser l'accès au
+   réseau : cocher réseaux privés ET publics (un réseau d'événement est
+   souvent classé Public). Sans cette autorisation, aucune sonde n'arrive.
+   En administrateur, l'équivalent :
+
+   ```powershell
+   New-NetFirewallRule -DisplayName "Console régie Pointe Noire (TCP)" -Direction Inbound -Protocol TCP -LocalPort 8471 -Action Allow -Profile Any
+   New-NetFirewallRule -DisplayName "Console régie Pointe Noire (UDP)" -Direction Inbound -Protocol UDP -LocalPort 8472 -Action Allow -Profile Any
+   ```
+
+3. Sur la page de la console, section « Appairage et accès » : copier le
+   bloc proposé dans `config/consoles.json` sur le NAS (modèle :
+   `config/consoles.example.json`). `adresse` est l'adresse de secours du PC
+   régie, à mettre en IP fixe sur le réseau du site si possible.
+4. C'est tout : le relais voit le changement de `consoles.json` et fait
+   reposer la sonde sur chaque poste supervisé (comme après une mise à jour),
+   avec l'empreinte et le jeton du poste. Un poste qui n'était pas supervisé
+   doit l'être (« Superviser »), et il faut internet pour cette pose.
+
+La console garde son identité (certificat, secret, code de la page) dans son
+dossier : la relancer ne change rien. Changer de PC régie, c'est une autre
+console : remettre son code dans `consoles.json`. Le code d'appairage contient
+le secret, il ne se partage pas.
+
+Voir la page depuis un autre appareil : `https://<adresse du PC régie>:8471/`,
+puis le code à 6 chiffres affiché dans la fenêtre de la console. Le navigateur
+prévient d'un certificat inconnu : comparer l'empreinte avec celle de la
+fenêtre.
+
+Companion :
+
+1. Sur la page de la console, régler l'adresse de Companion
+   (`http://127.0.0.1:8000` s'il tourne sur le même PC).
+2. Dans Companion, Variables personnalisées : créer les variables listées
+   sur la page (`pn_resume`, `pn_etat`, `pn_alertes`, `pn_hors_ligne`, et par
+   poste `pn_pn09_etat`, `pn_pn09_texte`, `pn_pn09_cpu`). Je ne peux pas
+   confirmer qu'une variable absente est créée par l'API : la page affiche le
+   refus de Companion si c'est le cas.
+3. Sur un bouton : texte `$(custom:pn_pn09_texte)`, retour interne
+   « Variable : vérifier la valeur » sur `pn_pn09_etat` égal à `ALERTE` ou
+   `HORS LIGNE` pour la couleur.
+
+Pour un Companion sur un autre appareil qui lit plutôt que de recevoir :
+`GET https://<PC régie>:8471/api/companion` (toutes les variables en JSON) ou
+`/api/companion/pn_resume` (une valeur en texte), avec `?jeton=` ou
+`Authorization: Bearer` et le jeton Companion de la page.
+
+Côté poste, `agent/console.ps1` est posé par `agent/console-pose.ps1` dans
+le dossier de la sonde, juste après elle. Son état est dans
+`C:\ProgramData\PointeNoire\supervision\console-vue.json` (dernière
+adresse, ok, injoignable, jeton refusé). Une panne de la console ne change
+rien à l'envoi vers AVDiagram.
+
+Limites du lot 1 : lecture seule (les actions signées sont le lot 2), pas de
+renvoi du journal à AVDiagram (lot 3). La découverte UDP ne traverse pas un
+routeur : sur un autre réseau, seule l'adresse fixée marche.
+
 ## Envois : scripts approuvés et fichiers
 
 L'onglet « Envois » de la page Postes d'AVDiagram (migration 0075) tient une
@@ -507,3 +599,15 @@ python3 -m unittest discover -s tests -v
 ```
 
 Python 3.11 ou plus, bibliothèque standard uniquement.
+
+La console régie (`console/`) a besoin de `cryptography` (certificat) :
+
+```bash
+cd console
+pip install -r requirements.txt
+python3 -m unittest discover -s tests -v
+python3 -m regie --dossier /tmp/console --sans-navigateur
+```
+
+L'essai de bout en bout sous Windows PowerShell 5.1 est
+`console/essai-windows.ps1`, lancé par `.github/workflows/console.yml`.

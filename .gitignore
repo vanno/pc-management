@@ -7,3 +7,4 @@ config/logiciels.json
 config/installeurs.json
 installeurs/*
 !installeurs/LISEZMOI.txt
+config/consoles.json
