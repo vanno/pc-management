@@ -297,9 +297,9 @@ class Service:
             self.log(f"planification {name} ({slot.label()}) : {res.get('requested', 0)} poste(s) en ligne, {res.get('busy', 0)} déjà occupé(s)")
 
     def _repose(self, by_tag: dict[str, Device]) -> None:
-        """Après une mise à jour du relais qui change l'écran ou le mur, AVDiagram
-        les fait reposer là où ils sont affichés : un poste n'a plus besoin
-        qu'on retire puis remette son état à l'écran. Une seule demande par
+        """Après une mise à jour du relais qui change l'écran, le mur ou la sonde,
+        AVDiagram les fait reposer là où ils sont posés : un poste n'a plus
+        besoin qu'on retire puis remette son état à l'écran. Une seule demande par
         version, retentée au plus une fois par heure si AVDiagram la refuse."""
         if not by_tag or not hasattr(self.avd, "request_reposes"):
             return

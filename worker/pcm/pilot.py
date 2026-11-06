@@ -56,9 +56,12 @@ CHECK_SCRIPT = Path(__file__).resolve().parents[2] / "agent" / "controle.ps1"
 # Ce qui reste sur un poste après la commande qui l'a posé : l'écran (fond et
 # relevé du mode événement) et le mur. Après une mise à jour du relais, ces
 # scripts gardent leur ancienne version jusqu'à leur prochaine pose.
+# Les scripts posés sur les postes, par action : une mise à jour du relais
+# qui en change un les fait reposer là où ils sont posés (service._repose).
 POSED = {
     "fond": (WALLPAPER_SCRIPT, WALLPAPER_INSTALLER, SURVEY_SCRIPT, SURVEY_INSTALLER),
     "vignette": (THUMBNAIL_SCRIPT, THUMBNAIL_INSTALLER),
+    "supervision": (PROBE_SCRIPT,),
 }
 MESSAGE_KINDS = ("toast", "boite")
 MESSAGE_MAX = 500

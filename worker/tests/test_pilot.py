@@ -224,6 +224,15 @@ class SupervisionTests(unittest.TestCase):
         self.assertIn("AddMinutes(-90)", guard)
         self.assertLess(probe.rindex("debloque.log"), probe.index("$avant = Get-Compteurs"))
 
+    def test_repose_does_not_switch_the_new_probe_off(self):
+        # Reposer la sonde change son jeton : la mesure en cours s'arrête avant,
+        # et un 401 ne coupe la tâche que si config.json garde l'ancien jeton.
+        pilote = pilot.AGENT_SCRIPT.read_text(encoding="utf-8-sig")
+        install = pilote[pilote.index("function Install-Sonde"): pilote.index("function Remove-Sonde")]
+        self.assertLess(install.index("Stop-ScheduledTask -TaskName $tacheSonde"), install.index("Write-Utf8"))
+        probe = pilot.PROBE_SCRIPT.read_text(encoding="utf-8-sig")
+        self.assertIn("if ($code -eq 401 -and $jeton -eq $conf.jeton) { Disable-ScheduledTask", probe)
+
     def test_remove(self):
         mesh = FakeMesh({"supervision": [{"ok": True, "detail": "sonde retirée"}]})
         avd = FakeAvd()

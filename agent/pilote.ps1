@@ -429,6 +429,9 @@ function Install-Sonde($p) {
     $m = New-Object IO.MemoryStream(, [Convert]::FromBase64String($p.script))
     $g = New-Object IO.Compression.GZipStream($m, [IO.Compression.CompressionMode]::Decompress)
     $script = (New-Object IO.StreamReader($g, [Text.Encoding]::UTF8)).ReadToEnd()
+    # La mesure en cours part avec l'ancien jeton : refusée (401), elle
+    # couperait la tâche qu'on repose. Elle s'arrête avant.
+    Stop-ScheduledTask -TaskName $tacheSonde -ErrorAction SilentlyContinue
     if (-not (Test-Path $dossierSonde)) { New-Item -ItemType Directory -Path $dossierSonde -Force | Out-Null }
     # Le jeton ne se lit que par SYSTEM et les administrateurs (SID : sans dépendre de la langue).
     & icacls.exe $dossierSonde /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' | Out-Null
