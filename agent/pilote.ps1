@@ -7,7 +7,12 @@
       PNPL_PARAMS  JSON encodé en base64 UTF-8, avec `op` :
         etat             { evenement, depuis, cartes }
         alimentation     { mode: redemarrer | eteindre, force }
-        reseau           { interface, dhcp, ip, prefixe, passerelle, dns, retour, hote, port, delai }
+        reseau           { interface, dhcp, ip, prefixe, passerelle, dns, retour,
+                         hote, port, delai, fin, normal, appliquer } ; interface
+                         « @filaire » ou « @wifi » : la carte est choisie sur le
+                         poste ; appliquer : agent/reseau.ps1 (gzip, base64)
+        reseau_retablir  remet le réseau normal (celui d'avant le premier
+                         changement), comme le raccourci du bureau
         reseau_resultat  lit le résultat du dernier changement de réseau
         evenement        { actif, jours, parties } (windows_update, veille,
                          notifications, conseils, fond ; toutes sans parties)
@@ -29,11 +34,12 @@
   avec { op, ok, detail, ... }.
 
   Le changement de réseau coupe la connexion de l'agent : il ne se fait pas
-  dans cette commande. Elle garde la configuration d'avant, écrit un script et
-  le lance par une tâche planifiée (SYSTEM), puis rend la main. Ce script
-  applique la demande, vérifie que MeshCentral est joignable (TCP vers hote:port)
-  pendant `delai` secondes, et sinon remet la configuration d'avant. Le worker
-  lit ensuite le résultat (`reseau_resultat`), une fois l'agent revenu.
+  dans cette commande. Elle garde la configuration d'avant, écrit le script
+  agent/reseau.ps1 reçu dans la demande et le lance par une tâche planifiée
+  (SYSTEM), puis rend la main. Ce script applique la demande, vérifie que
+  MeshCentral est joignable (TCP vers hote:port) pendant `delai` secondes, et
+  sinon remet la configuration d'avant. Le worker lit ensuite le résultat
+  (`reseau_resultat`), une fois l'agent revenu.
 #>
 
 $ErrorActionPreference = 'Stop'
@@ -43,6 +49,7 @@ $base = Join-Path $env:ProgramData 'PointeNoire'
 $fichierEvenement = Join-Path $base 'mode-evenement.json'
 $dossierReseau = Join-Path $base 'reseau'
 $tacheReseau = 'PointeNoire-Reseau'
+$tacheRetour = 'PointeNoire-Reseau-Retour'
 $result = [ordered]@{ op = $null; ok = $false; detail = '' }
 
 function Send-Result {
@@ -302,98 +309,46 @@ function Disable-Evenement($Demande) {
 
 # --- Réseau --------------------------------------------------------------------
 
-# Le script de la tâche planifiée. Il ne dépend que de ses fichiers.
-$scriptReseau = @'
-$ErrorActionPreference = 'Stop'
-$dir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$d = Get-Content -Raw -Path (Join-Path $dir 'demande.json') | ConvertFrom-Json
-$avant = Get-Content -Raw -Path (Join-Path $dir 'avant.json') | ConvertFrom-Json
 
-function Write-Etat([string]$Etat, [string]$Detail) {
-    $j = [ordered]@{ etat = $Etat; detail = $Detail; le = (Get-Date).ToString('o') } | ConvertTo-Json -Compress
-    [IO.File]::WriteAllText((Join-Path $dir 'resultat.json'), $j, (New-Object System.Text.UTF8Encoding $false))
-}
-
-function Set-Config([string]$Alias, [bool]$Dhcp, $Adresses, $Passerelle, $Dns) {
-    Get-NetRoute -InterfaceAlias $Alias -AddressFamily IPv4 -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue | Remove-NetRoute -Confirm:$false -ErrorAction SilentlyContinue
-    if ($Dhcp) {
-        Get-NetIPAddress -InterfaceAlias $Alias -AddressFamily IPv4 -PrefixOrigin Manual -ErrorAction SilentlyContinue | Remove-NetIPAddress -Confirm:$false -ErrorAction SilentlyContinue
-        Set-NetIPInterface -InterfaceAlias $Alias -AddressFamily IPv4 -Dhcp Enabled
-        Set-DnsClientServerAddress -InterfaceAlias $Alias -ResetServerAddresses
-        & ipconfig.exe /renew "$Alias" | Out-Null
-        return
+# La carte d'un profil : « @filaire » ou « @wifi », choisie sur le poste.
+# D'abord une carte branchée, puis celle qui porte la route par défaut.
+function Resolve-Carte([string]$Genre) {
+    $cartes = @(Get-NetAdapter -Physical -ErrorAction SilentlyContinue | Where-Object {
+        $wifi = ($_.NdisPhysicalMedium -eq 9 -or $_.PhysicalMediaType -eq 'Native 802.11')
+        if ($Genre -eq '@wifi') { $wifi } else { (-not $wifi) -and ($_.NdisPhysicalMedium -eq 14 -or $_.PhysicalMediaType -eq '802.3') }
+    } | Sort-Object @{ e = { $_.Status -ne 'Up' } }, @{ e = { -not (Get-NetRoute -InterfaceIndex $_.ifIndex -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue) } }, Name)
+    if (-not $cartes.Count) {
+        $noms = (@(Get-NetAdapter -ErrorAction SilentlyContinue | ForEach-Object { $_.Name }) -join ', ')
+        throw "aucune carte $(if ($Genre -eq '@wifi') { 'Wi-Fi' } else { 'filaire' }) sur ce poste (cartes : $noms)"
     }
-    Set-NetIPInterface -InterfaceAlias $Alias -AddressFamily IPv4 -Dhcp Disabled
-    Get-NetIPAddress -InterfaceAlias $Alias -AddressFamily IPv4 -ErrorAction SilentlyContinue | Remove-NetIPAddress -Confirm:$false -ErrorAction SilentlyContinue
-    $premiere = $true
-    foreach ($a in @($Adresses)) {
-        $p = @{ InterfaceAlias = $Alias; AddressFamily = 'IPv4'; IPAddress = $a.ip; PrefixLength = [int]$a.prefixe }
-        if ($premiere -and $Passerelle) { $p.DefaultGateway = $Passerelle }
-        New-NetIPAddress @p | Out-Null
-        $premiere = $false
-    }
-    if (@($Dns).Count) { Set-DnsClientServerAddress -InterfaceAlias $Alias -ServerAddresses @($Dns) }
-    else { Set-DnsClientServerAddress -InterfaceAlias $Alias -ResetServerAddresses }
+    return $cartes[0].Name
 }
-
-function Restore {
-    Set-Config $avant.interface ([bool]$avant.dhcp) $avant.adresses $avant.passerelle $avant.dns
-}
-
-function Test-Mesh {
-    $c = New-Object System.Net.Sockets.TcpClient
-    try {
-        $t = $c.ConnectAsync($d.hote, [int]$d.port)
-        return ($t.Wait(3000) -and $c.Connected)
-    } catch { return $false } finally { $c.Dispose() }
-}
-
-Write-Etat 'en_cours' 'changement en cours'
-try {
-    $adresses = @()
-    if (-not $d.dhcp) { $adresses = @([pscustomobject]@{ ip = $d.ip; prefixe = $d.prefixe }) }
-    Set-Config $d.interface ([bool]$d.dhcp) $adresses $d.passerelle $d.dns
-} catch {
-    $msg = $_.Exception.Message
-    try { Restore } catch { }
-    Write-Etat 'echec' ("changement refusé par Windows, configuration d'avant remise : " + $msg)
-    return
-}
-if (-not $d.retour) {
-    Start-Sleep -Seconds 10
-    Write-Etat 'applique' 'appliqué sans retour automatique'
-    return
-}
-$depart = Get-Date
-$fin = $depart.AddSeconds([int]$d.delai)
-Start-Sleep -Seconds 5
-while ((Get-Date) -lt $fin) {
-    if (Test-Mesh) {
-        Write-Etat 'applique' ("MeshCentral joint après " + [int]((Get-Date) - $depart).TotalSeconds + " s")
-        return
-    }
-    Start-Sleep -Seconds 5
-}
-try {
-    Restore
-    Write-Etat 'retour' ("MeshCentral injoignable après " + [int]$d.delai + " s : configuration d'avant remise")
-} catch {
-    Write-Etat 'echec' ("MeshCentral injoignable, et le retour à la configuration d'avant a échoué : " + $_.Exception.Message)
-}
-'@
 
 function Start-Reseau($p) {
+    if ([string]$p.interface -in @('@filaire', '@wifi')) { $p.interface = Resolve-Carte $p.interface }
     if (-not (Get-NetAdapter -Name $p.interface -ErrorAction SilentlyContinue)) {
         $noms = (@(Get-NetAdapter -ErrorAction SilentlyContinue | ForEach-Object { $_.Name }) -join ', ')
         throw "aucune carte réseau nommée « $($p.interface) » sur ce poste (cartes : $noms)"
     }
-    $etat = Get-ScheduledTask -TaskName $tacheReseau -ErrorAction SilentlyContinue
-    if ($etat -and $etat.State -eq 'Running') { throw 'un changement de réseau est déjà en cours sur ce poste' }
+    foreach ($t in @($tacheReseau, $tacheRetour)) {
+        $etat = Get-ScheduledTask -TaskName $t -ErrorAction SilentlyContinue
+        if ($etat -and $etat.State -eq 'Running') { throw 'un changement de réseau est déjà en cours sur ce poste' }
+    }
     if (-not (Test-Path $dossierReseau)) { New-Item -ItemType Directory -Path $dossierReseau -Force | Out-Null }
     $avant = Get-Carte $p.interface
     Write-Utf8 (Join-Path $dossierReseau 'avant.json') ($avant | ConvertTo-Json -Depth 5)
+    # La configuration normale reste celle d'avant le premier changement d'une
+    # suite de profils, tant que son retour est prévu.
+    $fBase = Join-Path $dossierReseau 'base.json'
+    if (-not ((Test-Path $fBase) -and (Get-ScheduledTask -TaskName $tacheRetour -ErrorAction SilentlyContinue))) {
+        Write-Utf8 $fBase ($avant | ConvertTo-Json -Depth 5)
+    }
     Write-Utf8 (Join-Path $dossierReseau 'demande.json') ($p | ConvertTo-Json -Depth 5)
-    Write-Utf8 (Join-Path $dossierReseau 'appliquer.ps1') $scriptReseau
+    $m = New-Object IO.MemoryStream(, [Convert]::FromBase64String([string]$p.appliquer))
+    $g = New-Object IO.Compression.GZipStream($m, [IO.Compression.CompressionMode]::Decompress)
+    # Avec BOM : sans lui, Windows PowerShell 5.1 lit le fichier en ANSI et ses accents se perdent.
+    [IO.File]::WriteAllText((Join-Path $dossierReseau 'appliquer.ps1'), (New-Object IO.StreamReader($g, [Text.Encoding]::UTF8)).ReadToEnd(), (New-Object System.Text.UTF8Encoding $true))
+    $p.PSObject.Properties.Remove('appliquer')
     Write-Utf8 (Join-Path $dossierReseau 'resultat.json') '{"etat":"prevu","detail":"en attente de la tâche planifiée"}'
     $script = Join-Path $dossierReseau 'appliquer.ps1'
     $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$script`""
@@ -403,7 +358,23 @@ function Start-Reseau($p) {
     Start-ScheduledTask -TaskName $tacheReseau
     $result.ok = $true
     $result.avant = $avant
+    $result.interface = $p.interface
     $result.detail = 'changement lancé'
+}
+
+# « Revenir au réseau normal » depuis AVDiagram : la même tâche que le raccourci.
+function Start-Retablir {
+    if (-not ((Test-Path (Join-Path $dossierReseau 'base.json')) -and (Get-ScheduledTask -TaskName $tacheRetour -ErrorAction SilentlyContinue))) {
+        $result.ok = $true
+        $result.rien = $true
+        $result.detail = 'le poste est déjà sur son réseau normal'
+        return
+    }
+    Write-Utf8 (Join-Path $dossierReseau 'demande.json') (@{ interface = (Get-Content -Raw -Path (Join-Path $dossierReseau 'base.json') | ConvertFrom-Json).interface } | ConvertTo-Json)
+    Write-Utf8 (Join-Path $dossierReseau 'resultat.json') '{"etat":"prevu","detail":"retour au réseau normal demandé"}'
+    Start-ScheduledTask -TaskName $tacheRetour
+    $result.ok = $true
+    $result.detail = 'retour lancé'
 }
 
 function Read-Reseau {
@@ -413,7 +384,7 @@ function Read-Reseau {
     $result.etat = $r.etat
     $result.detail = $r.detail
     $result.ok = $true
-    if ($r.etat -in @('applique', 'retour', 'echec')) {
+    if ($r.etat -in @('applique', 'retour', 'echec', 'revenu')) {
         Unregister-ScheduledTask -TaskName $tacheReseau -Confirm:$false -ErrorAction SilentlyContinue
         $result.carte = Get-Carte (Get-Content -Raw -Path (Join-Path $dossierReseau 'demande.json') | ConvertFrom-Json).interface
     }
@@ -837,7 +808,7 @@ function Update-Fond {
         $d = [string]$phrases[0]
         if (-not $result.ok) { $pourquoi = @($phrases | Where-Object { $_ -match 'pas retirées|[Rr]efusé|échec|erreur' }); if ($pourquoi.Count) { $d = [string]$pourquoi[0] } }
         $d = $d -replace '^mode événement ', ''
-        $nom = @{ evenement = 'Mode événement'; nettoyage = 'Allègement'; supervision = 'Suivi'; alimentation = 'Alimentation'; reseau = 'Réseau'; script = 'Script'; fichier = 'Fichier' }[[string]$result.op]
+        $nom = @{ evenement = 'Mode événement'; nettoyage = 'Allègement'; supervision = 'Suivi'; alimentation = 'Alimentation'; reseau = 'Réseau'; reseau_retablir = 'Réseau'; script = 'Script'; fichier = 'Fichier' }[[string]$result.op]
         if (-not $nom) { $nom = [string]$result.op }
         $h = "${nom} : $d"
         if ($h.Length -gt 70) { $h = $h.Substring(0, 69) + '…' }
@@ -876,6 +847,7 @@ try {
             else { $result.detail = "shutdown.exe a rendu le code $code" }
         }
         'reseau' { Start-Reseau $p }
+        'reseau_retablir' { Start-Retablir }
         'reseau_resultat' { Read-Reseau }
         'evenement' {
             if ($p.actif) {

@@ -36,6 +36,7 @@ import json
 import re
 import time
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable
 from urllib.parse import urlparse
@@ -57,6 +58,7 @@ THUMBNAIL_SCRIPT = Path(__file__).resolve().parents[2] / "agent" / "vignette.ps1
 THUMBNAIL_INSTALLER = Path(__file__).resolve().parents[2] / "agent" / "vignette-pose.ps1"
 CHECK_SCRIPT = Path(__file__).resolve().parents[2] / "agent" / "controle.ps1"
 # L'envoi à la console régie locale, posé dans le dossier de la sonde.
+NETWORK_SCRIPT = Path(__file__).resolve().parents[2] / "agent" / "reseau.ps1"
 CONSOLE_SCRIPT = Path(__file__).resolve().parents[2] / "agent" / "console.ps1"
 CONSOLE_INSTALLER = Path(__file__).resolve().parents[2] / "agent" / "console-pose.ps1"
 # Ce qui reste sur un poste après la commande qui l'a posé : l'écran (fond et
@@ -75,6 +77,9 @@ TITLE_MAX = 60
 CONTROL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 REFERENCE_RE = re.compile(r"^[\w .-]{1,60}$")
 INTERFACE_RE = re.compile(r"^[^\W_][\w ._()&+'-]{0,79}$")
+# Une carte choisie sur le poste par son genre, pour un profil valable partout.
+AUTO_CARDS = {"@filaire": "la carte filaire", "@wifi": "le Wi-Fi"}
+EVENT_DAYS_MAX = 35
 POWER_MODES = ("redemarrer", "eteindre", "reveiller")
 # Le délai pendant lequel le poste doit joindre MeshCentral avant de revenir en arrière.
 NETWORK_DELAY = 90
@@ -107,21 +112,48 @@ class Network:
     gateway: str | None = None
     dns: tuple[str, ...] = ()
     rollback: bool = True
+    # Profils : l'heure (ISO 8601 avec fuseau) où le poste revient seul à son
+    # réseau normal, ou ce réglage *est* le réseau normal (le retour s'efface).
+    until: str | None = None
+    normal: bool = False
 
     def label(self) -> str:
+        card = AUTO_CARDS.get(self.interface, self.interface)
         if self.dhcp:
-            return f"DHCP sur {self.interface}"
-        return f"{self.ip}/{self.prefix} sur {self.interface}"
+            return f"DHCP sur {card}"
+        return f"{self.ip}/{self.prefix} sur {card}"
 
 
-def parse_network(params: dict) -> Network:
+def parse_until(value, now: datetime | None = None) -> str | None:
+    """L'heure du retour au réseau normal : dans le futur, à 35 jours au plus."""
+    if value in (None, ""):
+        return None
+    try:
+        at = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise PilotError(f"Heure de retour illisible : {value!r}") from exc
+    if at.tzinfo is None:
+        raise PilotError("Heure de retour sans fuseau horaire.")
+    now = now or datetime.now(timezone.utc)
+    if at <= now + timedelta(minutes=2):
+        raise PilotError("L'heure de retour au réseau normal est déjà passée.")
+    if at > now + timedelta(days=EVENT_DAYS_MAX):
+        raise PilotError(f"Retour au réseau normal à plus de {EVENT_DAYS_MAX} jours.")
+    return at.isoformat()
+
+
+def parse_network(params: dict, now: datetime | None = None) -> Network:
     """Les paramètres de l'action `reseau`, revalidés."""
     name = str(params.get("interface") or "").strip()
-    if not INTERFACE_RE.match(name):
+    if name not in AUTO_CARDS and not INTERFACE_RE.match(name):
         raise PilotError(f"Nom de carte réseau illisible : {name!r}")
     rollback = params.get("retour") is not False
+    normal = params.get("normal") is True
+    until = parse_until(params.get("fin"), now)
+    if normal and until:
+        raise PilotError("Le réseau normal du poste n'a pas d'heure de retour.")
     if params.get("dhcp") is True:
-        return Network(name, True, rollback=rollback)
+        return Network(name, True, rollback=rollback, until=until, normal=normal)
     try:
         ip = ipaddress.IPv4Address(str(params.get("ip") or ""))
         prefix = int(params.get("prefixe"))
@@ -137,7 +169,7 @@ def parse_network(params: dict) -> Network:
         dns = tuple(str(ipaddress.IPv4Address(str(d))) for d in (params.get("dns") or [])[:2])
     except (ValueError, TypeError) as exc:
         raise PilotError(f"Adresse refusée : {exc}") from exc
-    return Network(name, False, str(ip), prefix, str(gw) if gw else None, dns, rollback)
+    return Network(name, False, str(ip), prefix, str(gw) if gw else None, dns, rollback, until, normal)
 
 
 def mesh_target(url: str | None) -> tuple[str, int]:
@@ -631,6 +663,8 @@ def network(
     """Lance le changement sur le poste, attend, puis lit son résultat une fois
     l'agent revenu (sur la nouvelle adresse, ou l'ancienne après un retour)."""
     try:
+        if params.get("retablir") is True:
+            return restore_network(mesh, device_id, new_nonce, sleep=sleep, script=script)
         net = parse_network(params)
         host, port = mesh_target(mesh_url)
     except PilotError as exc:
@@ -647,6 +681,9 @@ def network(
         "hote": host,
         "port": port,
         "delai": NETWORK_DELAY,
+        "fin": net.until,
+        "normal": net.normal,
+        "appliquer": pack(slim(NETWORK_SCRIPT.read_text(encoding="utf-8-sig")).encode("utf-8")),
     }
     try:
         reply = call(mesh, device_id, request, new_nonce, script=script)
@@ -655,6 +692,8 @@ def network(
     if not reply.get("ok"):
         return False, f"Changement refusé : {reply.get('detail')}"
     before = _describe(reply.get("avant"))
+    label = net.label() if net.interface not in AUTO_CARDS or not reply.get("interface") else Network(
+        str(reply.get("interface")), net.dhcp, net.ip, net.prefix).label()
     sleep(NETWORK_FIRST_READ if net.rollback else 30)
     last = ""
     for _ in range(NETWORK_READS):
@@ -667,19 +706,55 @@ def network(
         etat = r.get("etat")
         now = _describe(r.get("carte"))
         if etat == "applique":
-            return True, f"Réseau {net.label()} appliqué : {r.get('detail')}. Avant : {before}. Maintenant : {now}"
+            return True, f"Réseau {label} appliqué : {r.get('detail')}. Avant : {before}. Maintenant : {now}"
         if etat == "retour":
-            return False, f"Réseau {net.label()} non gardé : {r.get('detail')}. Le poste est revenu à : {now}"
+            return False, f"Réseau {label} non gardé : {r.get('detail')}. Le poste est revenu à : {now}"
         if etat == "echec":
-            return False, f"Réseau {net.label()} : {r.get('detail')}"
+            return False, f"Réseau {label} : {r.get('detail')}"
         last = f"changement toujours {etat}"
         sleep(NETWORK_READ_GAP)
     if not net.rollback:
         return False, (
-            f"Réseau {net.label()} demandé sans retour automatique : le poste ne répond plus à MeshCentral "
+            f"Réseau {label} demandé sans retour automatique : le poste ne répond plus à MeshCentral "
             f"({last}). C'est attendu sur un réseau fermé. Avant : {before}"
         )
-    return False, f"Le poste ne répond plus depuis le changement {net.label()} ({last}). Avant : {before}"
+    return False, f"Le poste ne répond plus depuis le changement {label} ({last}). Avant : {before}"
+
+
+def restore_network(
+    mesh: MeshCtrl,
+    device_id: str,
+    new_nonce: Callable[[], str],
+    sleep: Callable[[float], None] = time.sleep,
+    script: str | None = None,
+) -> tuple[bool, str]:
+    """« Revenir au réseau normal » : la tâche du raccourci, lancée à distance."""
+    try:
+        reply = call(mesh, device_id, {"op": "reseau_retablir"}, new_nonce, script=script)
+    except (MeshError, PilotError) as exc:
+        return False, f"Retour non lancé : {exc}"
+    if not reply.get("ok"):
+        return False, f"Retour refusé : {reply.get('detail')}"
+    if reply.get("rien"):
+        return True, "Rien à faire : le poste est déjà sur son réseau normal."
+    sleep(30)
+    last = ""
+    for _ in range(NETWORK_READS):
+        try:
+            r = call(mesh, device_id, {"op": "reseau_resultat"}, new_nonce, timeout=READ_TIMEOUT, script=script)
+        except (MeshError, PilotError) as exc:
+            last = str(exc)
+            sleep(NETWORK_READ_GAP)
+            continue
+        etat = r.get("etat")
+        if etat == "revenu":
+            d = str(r.get("detail") or "réseau normal remis")
+            return True, f"{d[:1].upper()}{d[1:]}. Maintenant : {_describe(r.get('carte'))}"
+        if etat == "echec":
+            return False, str(r.get("detail"))
+        last = f"retour toujours {etat}"
+        sleep(NETWORK_READ_GAP)
+    return False, f"Le poste ne répond plus depuis le retour au réseau normal ({last})."
 
 
 def _describe(card: dict | None) -> str:
