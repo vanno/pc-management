@@ -19,11 +19,20 @@ $echecs = 0
 function Test-Point([string]$Nom, [bool]$Ok, [string]$Detail) {
     if ($Ok) { Write-Host "OK     $Nom" } else { Write-Host "ECHEC  $Nom : $Detail"; $script:echecs++ }
 }
+# Un processus de tâche met plusieurs secondes à démarrer sous Windows : on attend que l'écoute soit ouverte.
+function Wait-Pret([string]$Fichier, $Tache) {
+    for ($k = 0; $k -lt 60 -and -not (Test-Path $Fichier); $k++) {
+        if ($Tache.State -in 'Failed', 'Completed', 'Stopped') { break }
+        Start-Sleep -Milliseconds 500
+    }
+    if (-not (Test-Path $Fichier)) { Write-Host "Écoute pas ouverte ($($Tache.State)) : $(Receive-Job $Tache 2>&1 | Out-String)" }
+}
 Write-Host "PowerShell $($PSVersionTable.PSVersion) ($($PSVersionTable.PSEdition))"
 
 foreach ($f in 'vmix.ps1', 'diagnostic.ps1', 'supervision.ps1', 'console-pose.ps1') {
+    # Lus en UTF-8 comme le relais les envoie (ParseFile lirait un fichier sans BOM en ANSI).
     $err = $null
-    [void][Management.Automation.Language.Parser]::ParseFile((Join-Path $racine "agent\$f"), [ref]$null, [ref]$err)
+    [void][Management.Automation.Language.Parser]::ParseInput([IO.File]::ReadAllText((Join-Path $racine "agent\$f"), [Text.Encoding]::UTF8), [ref]$null, [ref]$err)
     Test-Point "$f se lit sous PowerShell 5.1" (-not $err) ($err | Out-String)
 }
 
@@ -49,11 +58,13 @@ try {
     Test-Point 'vMix muet' ($v -and $v.ok -eq $false -and $v.running -eq $true) ($v | ConvertTo-Json -Compress)
 
     # 3. API HTTP 8088
-    $http = Start-Job -ArgumentList $xml -ScriptBlock {
-        param($Xml)
+    $pret = Join-Path $tmp 'pret-http'
+    $http = Start-Job -ArgumentList $xml, $pret -ScriptBlock {
+        param($Xml, $Pret)
         $l = New-Object Net.HttpListener
         $l.Prefixes.Add('http://127.0.0.1:8088/')
         $l.Start()
+        Set-Content -Path $Pret -Value 1
         # Une seule lecture attendue : la tâche finit d'elle-même.
         for ($i = 0; $i -lt 1; $i++) {
             $c = $l.GetContext()
@@ -64,7 +75,7 @@ try {
         }
         $l.Stop()
     }
-    Start-Sleep -Seconds 2
+    Wait-Pret $pret $http
     $v = & $vmix
     Test-Point 'lecture par le port 8088' ($v.ok -and $v.source -eq 'http' -and $v.streaming -and $v.recording -and $v.recording_s -eq 125 -and $v.inputs -eq 1 -and $v.version -eq '27.0.0.49') ($v | ConvertTo-Json -Compress)
     Test-Point 'destinations du stream' (@($v.channels).Count -eq 2 -and $v.channels[0] -eq $true -and $v.channels[1] -eq $false) ($v.channels | ConvertTo-Json -Compress)
@@ -72,10 +83,12 @@ try {
 
     # 4. Port TCP 8099, stream arrêté depuis la mesure d'avant
     $xml2 = $xml.Replace('channel1="True"', 'channel1="False"').Replace('>True</streaming>', '>False</streaming>')
-    $tcp = Start-Job -ArgumentList $xml2 -ScriptBlock {
-        param($Xml)
+    $pret = Join-Path $tmp 'pret-tcp'
+    $tcp = Start-Job -ArgumentList $xml2, $pret -ScriptBlock {
+        param($Xml, $Pret)
         $l = New-Object Net.Sockets.TcpListener([Net.IPAddress]::Loopback, 8099)
         $l.Start()
+        Set-Content -Path $Pret -Value 1
         for ($i = 0; $i -lt 1; $i++) {
             $c = $l.AcceptTcpClient()
             $s = $c.GetStream()
@@ -91,7 +104,7 @@ try {
         }
         $l.Stop()
     }
-    Start-Sleep -Seconds 2
+    Wait-Pret $pret $tcp
     $v = & $vmix
     Test-Point 'lecture par le port 8099' ($v.ok -and $v.source -eq 'tcp' -and $v.streaming -eq $false) ($v | ConvertTo-Json -Compress)
     Test-Point 'arrêt du stream noté' ([bool]$v.stopped_at) ($v | ConvertTo-Json -Compress)
@@ -104,7 +117,7 @@ $v = & $vmix
 Test-Point 'vMix fermé après un stream' ($v -and $v.running -eq $false -and $v.detail -eq 'vMix fermé') ($v | ConvertTo-Json -Compress)
 
 # 5. Test de sortie : les fonctions du diagnostic, contre de faux serveurs
-$src = Get-Content -Raw (Join-Path $racine 'agent\diagnostic.ps1')
+$src = [IO.File]::ReadAllText((Join-Path $racine 'agent\diagnostic.ps1'), [Text.Encoding]::UTF8)
 $ast = [Management.Automation.Language.Parser]::ParseInput($src, [ref]$null, [ref]$null)
 foreach ($f in $ast.FindAll({ $args[0] -is [Management.Automation.Language.FunctionDefinitionAst] }, $false)) {
     if ($f.Name -in 'Get-Stats', 'Read-Octets', 'Test-Rtmp', 'Test-Srt', 'Measure-Sortie') { . ([ScriptBlock]::Create($f.Extent.Text)) }
