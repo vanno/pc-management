@@ -588,6 +588,31 @@ class AgentScriptTests(unittest.TestCase):
         self.assertIn("$proteges -notcontains $r[1]", nettoyage)
         self.assertIn("Add-Point 'Réglages protégés' $true", nettoyage)
 
+    def test_cleanup_turns_widgets_off_through_local_group_policy(self):
+        """PN09, 2026-11-06 : widgets laissés à Windows par UCPD. La stratégie
+        locale (Registry.pol, gpupdate) les coupe, aussi sur Windows Famille
+        sans gpedit ; si Windows l'ignore, leur paquet est retiré."""
+        pilote = pilot.with_policy()
+        corps = pilote.split("function Enable-Nettoyage", 1)[1].split("\nfunction ", 1)[0]
+        self.assertLess(corps.index("$etat.proteges += $r[1]"), corps.index("Disable-Widgets $etat ([ref]$refus)"))
+        self.assertLess(corps.index("Disable-Widgets $etat"), corps.rindex("Write-Utf8 $fichierNettoyage"))
+        self.assertIn("$etat.politique = @($lu.politique", corps)
+        widgets = pilote.split("function Disable-Widgets", 1)[1].split("\nfunction ", 1)[0]
+        self.assertLess(widgets.index("Set-PolitiqueLocale"), widgets.index("Remove-AppxPackage"), "la stratégie avant le paquet")
+        politique = pilote.split("function Set-PolitiqueLocale", 1)[1].split("\nfunction ", 1)[0]
+        self.assertLess(politique.index("Write-Pol"), politique.index("Update-GptIni"))
+        # gpupdate lit sa réponse dans le tube : l'agent ne ferme jamais stdin.
+        self.assertIn("'N' | & (Join-Path $sys 'gpupdate.exe') /target:computer /force", politique)
+        self.assertIn("{35378EAC-683F-11D2-A89A-00C04FBBCFA2}{D02B1F72-3407-48AE-BA88-E8213C6761F1}", pilote)
+        retour = pilote.split("function Disable-Nettoyage", 1)[1].split("\nfunction ", 1)[0]
+        self.assertLess(retour.index("Set-PolitiqueLocale"), retour.index("Set-Valeur $cle $nom $q.Value"))
+        self.assertIn("if ($politique -contains $nom) { continue }", retour)
+        # La stratégie voyage devant pilote.ps1, pour l'allègement seulement.
+        cmd = pilot.build_command({"op": "nettoyage", "actif": True}, "ab12", script=pilot.with_policy())
+        self.assertLess(len(cmd), 18_000)
+        self.assertIn("function Set-PolitiqueLocale", pilot_script(cmd))
+        self.assertNotIn("function Set-PolitiqueLocale", pilot_script(pilot.build_command({"op": "etat"}, "ab12")))
+
     def test_cleanup_names_what_windows_refuses(self):
         """« Tentative d'exécution d'une opération non autorisée » sans plus :
         chaque écriture du nettoyage est gardée, et son refus nommé."""

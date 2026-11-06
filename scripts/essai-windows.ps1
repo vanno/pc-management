@@ -74,6 +74,7 @@ $envois = [ordered]@{}
 foreach ($f in Get-ChildItem $agent -Filter '*.ps1' | Sort-Object Name) { $envois[$f.Name] = Lis $f.Name }
 $envois['releve-pose.ps1+releve.ps1'] = "`$FondSource = @'`n" + (Lis 'releve.ps1') + "`n'@`n" + (Lis 'releve-pose.ps1')
 $envois['fond-pose.ps1+fond.ps1'] = "`$FondSource = @'`n" + (Lis 'fond.ps1') + "`n'@`n" + (Lis 'fond-pose.ps1')
+$envois['politique.ps1+pilote.ps1'] = (Lis 'politique.ps1') + "`n" + (Lis 'pilote.ps1')
 
 foreach ($nom in $envois.Keys) {
     $texte = $envois[$nom]
