@@ -57,6 +57,10 @@ function Read-Http {
     try {
         $q = [Net.HttpWebRequest][Net.WebRequest]::Create('http://127.0.0.1:8088/api')
         $q.Proxy = $null
+        # Une connexion neuve à chaque mesure : la sonde tourne longtemps, et
+        # une connexion gardée d'une mesure à l'autre peut avoir été fermée
+        # par vMix entre-temps (« connexion fermée par l'hôte distant »).
+        $q.KeepAlive = $false
         $q.Timeout = $Delai
         $q.ReadWriteTimeout = $Delai
         $rep = $q.GetResponse()
