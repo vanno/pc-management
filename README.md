@@ -28,11 +28,14 @@ synchronisé sur sa fiche du parc AVDiagram.
    `--no-details` désactive cet envoi.
 
    Depuis le schéma 2 de `agent/inventory.ps1`, l'inventaire porte aussi la
-   santé de chaque disque (`Get-PhysicalDisk`, `Get-StorageReliabilityCounter` :
+   santé de chaque disque (`Get-PhysicalDisk`, page SMART NVMe lue directement
+   par `IOCTL_STORAGE_QUERY_PROPERTY`, sinon `Get-StorageReliabilityCounter`,
+   refusé sur certains postes :
    état Windows, usure en %, température, heures sous tension, erreurs non
    corrigées, alerte SMART `MSStorageDriver_FailurePredictStatus`), les cycles
    et capacités de la batterie (`BatteryCycleCount`, `BatteryStaticData`,
-   `BatteryFullChargedCapacity`), la licence Windows (`SoftwareLicensingProduct` :
+   `BatteryFullChargedCapacity`, et à défaut le rapport `powercfg /batteryreport`,
+   car `BatteryStaticData` échoue sur certains Lenovo), la licence Windows (`SoftwareLicensingProduct` :
    activée ou non, canal OEM, Retail ou Volume, les 5 derniers caractères de
    la clé, jamais la clé) et l'édition de vMix, lue par son API locale
    (`http://127.0.0.1:8088/api`) quand vMix est ouvert. vMix fermé, l'édition
