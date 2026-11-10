@@ -491,6 +491,25 @@ cible ; débit moyen et maximal, erreurs par carte ; Wi-Fi ; DNS ; TCP) et les
 sonde. Sans réseau, 60 minutes et 300 événements attendent dans
 `en-attente.json`.
 
+### Essais avant fusion et déploiement
+
+Chaque PR lance `.github/workflows/essais.yml` : les tests du relais, puis sur
+la machine Windows jetable de GitHub (Windows PowerShell 5.1)
+`scripts/essai-windows.ps1` (syntaxe et envoi de chaque script) et
+`scripts/essai-veille.ps1 -Jetable`. Ce dernier pose la veille par la vraie
+commande du relais (`scripts/essai-commande.py`, donc `pcm.pilot`), la laisse
+tourner 150 s sous SYSTEM, relit le journal du poste, reçoit ses envois sur un
+faux AVDiagram en HTTPS (`scripts/essai-recepteur.py`), mesure le processeur
+consommé, puis la retire. Il refuse de tourner sur un poste qui a une sonde.
+Les envois reçus sont rejoués côté AVDiagram
+(`src/lib/postes/fixtures/veille-windows.json`).
+
+Déploiement : fusionner cette PR d'abord (l'image part sur GHCR, le NAS la
+prend à 04:30 ou au bouton « Mettre à jour l'outil »), puis celle d'AVDiagram
+(migration 0093 passée au déploiement Vercel). Sur un poste, la veille arrive
+au prochain « Activer le suivi ». Tant qu'AVDiagram n'a pas la route, la
+veille reçoit 404 et jette ses minutes : rien ne s'accumule.
+
 ## Console régie locale (site sans internet, lot 1)
 
 Sur un site sans internet, les postes ne joignent plus AVDiagram ni
