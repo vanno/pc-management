@@ -464,6 +464,33 @@ l'intervalle, et une carte filaire tombée depuis moins de 10 minutes
 switchs non manageables (GS105), c'est le seul regard sur le câble. Un poste
 déjà supervisé reçoit cette sonde au prochain « Superviser ».
 
+## Veille réseau (monitoring réseau, lot 1)
+
+Posée juste après la sonde, par sa propre commande (`agent/reseau-pose.ps1`,
+`agent/reseau.ps1` dans `$VeilleSource`), dans
+`C:\ProgramData\PointeNoire\reseau`, tâche `PointeNoire-Reseau` (SYSTEM, au
+démarrage puis relancée toutes les 5 minutes si elle s'est arrêtée, une seule
+à la fois). Retirée avec la sonde. Rien n'est changé sur le poste.
+
+Chaque seconde, un ping vers la passerelle, la cible du site et 1.1.1.1. La
+cible du site vient de la tâche (`cible`, `nom_cible`, réglées dans AVDiagram),
+sinon de la première console régie qui a une adresse dans
+`config/consoles.json`. Toutes les 2 s, l'état des cartes physiques par .NET
+(lien, vitesse, adresse, passerelle, DNS, serveur DHCP, octets, erreurs,
+paquets jetés, multicast et broadcast reçus). Toutes les 10 s, le Wi-Fi
+(netsh), la MAC de la passerelle et les retransmissions TCP. Toutes les 30 s,
+la résolution DNS du serveur AVDiagram demandée au serveur DNS de la carte, la
+connexion TCP 443, le profil du pare-feu, les conflits d'adresse (Tcpip 4199)
+et les déconnexions Wi-Fi (WLAN-AutoConfig 8003).
+
+Sur le poste, dans `journal` : une ligne par seconde (un fichier par heure,
+24 h), les événements et les résumés par minute (7 jours). Chaque minute, le
+résumé (min, médiane, 95e centile, max, gigue, perte, plus longue coupure par
+cible ; débit moyen et maximal, erreurs par carte ; Wi-Fi ; DNS ; TCP) et les
+événements partent vers `POST /api/v1/postes/reseau`, avec le jeton de la
+sonde. Sans réseau, 60 minutes et 300 événements attendent dans
+`en-attente.json`.
+
 ## Console régie locale (site sans internet, lot 1)
 
 Sur un site sans internet, les postes ne joignent plus AVDiagram ni

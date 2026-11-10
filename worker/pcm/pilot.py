@@ -64,6 +64,9 @@ CHECK_SCRIPT = Path(__file__).resolve().parents[2] / "agent" / "controle.ps1"
 # L'envoi à la console régie locale, posé dans le dossier de la sonde.
 CONSOLE_SCRIPT = Path(__file__).resolve().parents[2] / "agent" / "console.ps1"
 CONSOLE_INSTALLER = Path(__file__).resolve().parents[2] / "agent" / "console-pose.ps1"
+# La veille réseau (monitoring réseau, lot 1), posée après la sonde dont elle prend le jeton.
+WATCH_SCRIPT = Path(__file__).resolve().parents[2] / "agent" / "reseau.ps1"
+WATCH_INSTALLER = Path(__file__).resolve().parents[2] / "agent" / "reseau-pose.ps1"
 # Ce qui reste sur un poste après la commande qui l'a posé : l'écran (fond et
 # relevé du mode événement) et le mur. Après une mise à jour du relais, ces
 # scripts gardent leur ancienne version jusqu'à leur prochaine pose.
@@ -72,7 +75,7 @@ CONSOLE_INSTALLER = Path(__file__).resolve().parents[2] / "agent" / "console-pos
 POSED = {
     "fond": (WALLPAPER_SCRIPT, WALLPAPER_INSTALLER, SURVEY_SCRIPT, SURVEY_INSTALLER),
     "vignette": (THUMBNAIL_SCRIPT, THUMBNAIL_INSTALLER),
-    "supervision": (PROBE_SCRIPT, CONSOLE_SCRIPT, CONSOLE_INSTALLER),
+    "supervision": (PROBE_SCRIPT, CONSOLE_SCRIPT, CONSOLE_INSTALLER, WATCH_SCRIPT, WATCH_INSTALLER),
 }
 MESSAGE_KINDS = ("toast", "boite")
 MESSAGE_MAX = 500
@@ -376,19 +379,62 @@ def supervision(mesh: MeshCtrl, device_id: str, unit_id: str, params: dict, avd,
         return False, f"AVDiagram : {exc}"
     detail = reply.get("detail") or ""
     text = detail[:1].upper() + detail[1:]
-    if not reply.get("ok") or not consoles:
-        return bool(reply.get("ok")), text
+    if not reply.get("ok"):
+        return False, text
+    if consoles:
+        text = regie_console(mesh, device_id, consoles, reference, new_nonce, text)
+    # La veille réseau en dernier : elle vise la console régie, si elle a une adresse.
+    return True, network_watch(mesh, device_id, params, consoles, new_nonce, text)
+
+
+def regie_console(mesh: MeshCtrl, device_id: str, consoles: list[dict], reference: str, new_nonce: Callable[[], str], text: str) -> str:
     # La pose de la sonde retire une console posée avant (pilote.ps1), son
     # retrait emporte tout le dossier : seule une console connue est reposée.
     body = {"op": "console", "actif": True, "reference": reference.upper(), "consoles": regie.for_probe(consoles, reference)}
     try:
         second = call(mesh, device_id, body, new_nonce, script=with_source(CONSOLE_INSTALLER.read_text(encoding="utf-8"), CONSOLE_SCRIPT, "RegieSource"))
     except (MeshError, PilotError) as exc:
-        return True, f"{text}. Console régie pas posée : {exc}"
+        return f"{text}. Console régie pas posée : {exc}"
     extra = second.get("detail") or "pas de réponse"
     if not second.get("ok"):
-        return True, f"{text}. Console régie pas posée : {extra}"
-    return True, f"{text}. {extra[:1].upper() + extra[1:]}"
+        return f"{text}. Console régie pas posée : {extra}"
+    return f"{text}. {extra[:1].upper() + extra[1:]}"
+
+
+HOST_RE = re.compile(r"^[A-Za-z0-9.:-]{1,253}$")
+
+
+def watch_target(params: dict, consoles: list[dict]) -> tuple[str | None, str]:
+    """La cible du site visée par la veille, en plus de la passerelle : celle
+    de la tâche (réglée dans AVDiagram), sinon la première console régie qui
+    a une adresse sur le LAN, sinon aucune."""
+    cible = params.get("cible")
+    if isinstance(cible, str) and HOST_RE.fullmatch(cible.strip()):
+        nom = params.get("nom_cible")
+        return cible.strip(), (nom.strip()[:40] if isinstance(nom, str) else "")
+    for c in consoles:
+        if c.get("adresse"):
+            return c["adresse"], f"PC régie {c.get('nom') or ''}".strip()
+    return None, ""
+
+
+def network_watch(mesh: MeshCtrl, device_id: str, params: dict, consoles: list[dict], new_nonce: Callable[[], str], text: str) -> str:
+    """Pose (sonde posée) ou retire (sonde retirée) la veille réseau, par son
+    propre installeur : la sonde est déjà près de la longueur de commande.
+    Son échec n'annule pas la sonde, il se lit dans le compte rendu."""
+    body: dict = {"op": "reseau_veille", "actif": params["actif"]}
+    failed = "Veille réseau pas " + ("posée" if params["actif"] else "retirée")
+    if params["actif"]:
+        target, name = watch_target(params, consoles)
+        body.update({"cible": target, "nom_cible": name})
+    try:
+        reply = call(mesh, device_id, body, new_nonce, script=with_source(WATCH_INSTALLER.read_text(encoding="utf-8"), WATCH_SCRIPT, "VeilleSource"))
+    except (MeshError, PilotError) as exc:
+        return f"{text}. {failed} : {exc}"
+    extra = reply.get("detail") or "pas de réponse"
+    if not reply.get("ok"):
+        return f"{text}. {failed} : {extra}"
+    return f"{text}. {extra[:1].upper() + extra[1:]}"
 
 
 def wallpaper(mesh: MeshCtrl, device_id: str, reference: str, params: dict, new_nonce: Callable[[], str], script: str | None = None) -> tuple[bool, str] | tuple[bool, str, dict]:
@@ -706,6 +752,7 @@ def slim_fingerprints() -> dict[str, str]:
     sent["releve-pose.ps1+releve.ps1"] = with_wallpaper(SURVEY_INSTALLER.read_text(encoding="utf-8"), SURVEY_SCRIPT)
     sent["fond-pose.ps1+fond.ps1"] = with_wallpaper(WALLPAPER_INSTALLER.read_text(encoding="utf-8"), WALLPAPER_SCRIPT)
     sent["politique.ps1+pilote.ps1"] = with_policy()
+    sent["reseau-pose.ps1+reseau.ps1"] = with_source(WATCH_INSTALLER.read_text(encoding="utf-8"), WATCH_SCRIPT, "VeilleSource")
     return {name: hashlib.sha256(slim(text).encode("utf-8")).hexdigest()[:12] for name, text in sent.items()}
 
 

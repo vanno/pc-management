@@ -202,11 +202,11 @@ class FakeAvd:
 
 class SupervisionTests(unittest.TestCase):
     def test_install_sends_token_and_compressed_probe(self):
-        mesh = FakeMesh({"supervision": [{"ok": True, "detail": "sonde installée : premières mesures dans la minute"}]})
+        mesh = FakeMesh({"supervision": [{"ok": True, "detail": "sonde installée : premières mesures dans la minute"}], "reseau_veille": [{"ok": True, "detail": "veille réseau posée (pas de cible du site)"}]})
         avd = FakeAvd()
         ok, text = pilot.supervision(mesh, "node//pn01", "u1", {"actif": True}, avd, nonces())
         self.assertTrue(ok)
-        self.assertEqual(text, "Sonde installée : premières mesures dans la minute")
+        self.assertEqual(text, "Sonde installée : premières mesures dans la minute. Veille réseau posée (pas de cible du site)")
         request = mesh.calls[0][0]
         self.assertEqual((request["url"], request["jeton"]), ("https://avd.example/api/v1/postes/mesures", "pns_" + "a" * 43))
         sent = gzip.decompress(base64.b64decode(request["script"])).decode("utf-8")
@@ -254,11 +254,56 @@ class SupervisionTests(unittest.TestCase):
         self.assertLess(test.index("267009"), test.index("$info.LastTaskResult -ne 0"))
 
     def test_remove(self):
-        mesh = FakeMesh({"supervision": [{"ok": True, "detail": "sonde retirée"}]})
+        mesh = FakeMesh({"supervision": [{"ok": True, "detail": "sonde retirée"}], "reseau_veille": [{"ok": True, "detail": "veille réseau retirée"}]})
         avd = FakeAvd()
-        self.assertEqual(pilot.supervision(mesh, "n", "u1", {"actif": False}, avd, nonces()), (True, "Sonde retirée"))
+        self.assertEqual(pilot.supervision(mesh, "n", "u1", {"actif": False}, avd, nonces()), (True, "Sonde retirée. Veille réseau retirée"))
+        self.assertEqual(mesh.calls[1][0], {"op": "reseau_veille", "actif": False})
         self.assertEqual(avd.calls, [("remove", "u1")])
         self.assertFalse(pilot.supervision(mesh, "n", "", {"actif": True}, avd, nonces())[0])
+
+
+class NetworkWatchTests(unittest.TestCase):
+    def test_target_from_task_then_console(self):
+        consoles = [{"nom": "Régie", "adresse": ""}, {"nom": "Vannh", "adresse": "192.168.1.20"}]
+        self.assertEqual(pilot.watch_target({"cible": "10.0.0.5", "nom_cible": "M4250"}, consoles), ("10.0.0.5", "M4250"))
+        self.assertEqual(pilot.watch_target({}, consoles), ("192.168.1.20", "PC régie Vannh"))
+        self.assertEqual(pilot.watch_target({"cible": "1.2.3.4; rm"}, []), (None, ""))
+
+    def test_watch_travels_in_its_own_command(self):
+        mesh = FakeMesh({"supervision": [{"ok": True, "detail": "sonde installée"}], "reseau_veille": [{"ok": True, "detail": "veille réseau posée"}]})
+        commands = []
+        run = mesh.run_powershell
+
+        def spy(device_id, command, timeout=None):
+            commands.append(command)
+            return run(device_id, command, timeout)
+
+        mesh.run_powershell = spy
+        ok, _ = pilot.supervision(mesh, "n", "u1", {"actif": True, "cible": "192.168.1.50", "nom_cible": "PC régie"}, FakeAvd(), nonces())
+        self.assertTrue(ok)
+        body = mesh.calls[1][0]
+        self.assertEqual((body["op"], body["actif"], body["cible"], body["nom_cible"]), ("reseau_veille", True, "192.168.1.50", "PC régie"))
+        packed = re.search(r"FromBase64String\('([^']+)'\)", commands[1]).group(1)
+        script = gzip.decompress(base64.b64decode(packed)).decode("utf-8")
+        self.assertTrue(script.startswith("$VeilleSource = @'\n"))
+        self.assertIn("Global\\PointeNoire-Reseau", script)
+        self.assertLess(len(commands[1]), pilot.MAX_COMMAND)
+
+    def test_watch_failure_keeps_the_probe(self):
+        mesh = FakeMesh({"supervision": [{"ok": True, "detail": "sonde installée"}], "reseau_veille": [MeshError("délai dépassé")]})
+        ok, text = pilot.supervision(mesh, "n", "u1", {"actif": True}, FakeAvd(), nonces())
+        self.assertTrue(ok)
+        self.assertEqual(text, "Sonde installée. Veille réseau pas posée : délai dépassé")
+
+    def test_watch_is_reposed_with_the_probe(self):
+        self.assertIn(pilot.WATCH_SCRIPT, pilot.POSED["supervision"])
+        self.assertIn(pilot.WATCH_INSTALLER, pilot.POSED["supervision"])
+
+    def test_watch_sends_with_the_probe_token_to_its_own_route(self):
+        watch = pilot.WATCH_SCRIPT.read_text(encoding="utf-8-sig")
+        self.assertIn("-replace '/mesures/?$', '/reseau'", watch)
+        self.assertIn("Select-Object -Last 60", watch)
+        self.assertNotRegex(watch, r"(?m)^'@")
 
 
 ENVOI_ID = "0f1e2d3c-4b5a-4968-8776-655443322110"

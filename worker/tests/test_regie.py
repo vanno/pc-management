@@ -62,6 +62,7 @@ class SupervisionConsoleTests(unittest.TestCase):
         self.addCleanup(env.stop)
 
     def install(self, replies, reference="PN09"):
+        replies.setdefault("reseau_veille", [{"ok": True, "detail": "veille réseau posée"}])
         mesh = FakeMesh(replies)
         scripts = []
         run = mesh.run_powershell
@@ -76,8 +77,9 @@ class SupervisionConsoleTests(unittest.TestCase):
 
     def test_without_console_nothing_changes(self):
         (ok, text), mesh, _ = self.install({"supervision": [{"ok": True, "detail": "sonde installée"}]})
-        self.assertEqual((ok, text), (True, "Sonde installée"))
-        self.assertEqual(len(mesh.calls), 1)
+        self.assertEqual((ok, text), (True, "Sonde installée. Veille réseau posée"))
+        self.assertEqual([c[0]["op"] for c in mesh.calls], ["supervision", "reseau_veille"])
+        self.assertIsNone(mesh.calls[1][0]["cible"])
 
     def test_console_posed_after_the_probe(self):
         self.path.write_text(json.dumps({"consoles": [{"code": code(), "adresse": "192.168.1.20"}]}), encoding="utf-8")
@@ -86,7 +88,9 @@ class SupervisionConsoleTests(unittest.TestCase):
             "console": [{"ok": True, "detail": "console régie posée : Régie Vannh"}],
         })
         self.assertTrue(ok)
-        self.assertEqual(text, "Sonde installée. Console régie posée : Régie Vannh")
+        self.assertEqual(text, "Sonde installée. Console régie posée : Régie Vannh. Veille réseau posée")
+        # La veille vise la console régie quand AVDiagram ne donne pas de cible.
+        self.assertEqual(mesh.calls[2][0]["cible"], "192.168.1.20")
         body = mesh.calls[1][0]
         self.assertEqual((body["op"], body["actif"], body["reference"]), ("console", True, "PN09"))
         self.assertEqual(body["consoles"][0]["jeton"], regie.probe_token(SECRET, "PN09"))
