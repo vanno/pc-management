@@ -99,7 +99,7 @@ try {
     Start-Sleep -Seconds $Secondes
 
     # --- 4. Ce qu'elle a fait ---------------------------------------------------------
-    $veille = Get-Veille
+    $veille = @(Get-Veille)
     Dis ($veille.Count -eq 1) "$($veille.Count) veille en cours (une seule attendue), tâche $((Get-ScheduledTask -TaskName $tache).State)"
     if ($veille.Count -ge 1) {
         $v = $veille[0]
@@ -111,10 +111,10 @@ try {
         Dis ($part -lt 3) "processeur sous 3 % de la machine ($part %)"
     }
     $journal = Join-Path $dossier 'journal'
-    $secondes = @(Get-ChildItem -Path $journal -Filter 'secondes-*.csv' -ErrorAction SilentlyContinue | ForEach-Object { [IO.File]::ReadAllLines($_.FullName) } | Where-Object { $_ -match '^\d{4}-' })
-    Dis ($secondes.Count -ge [int]($Secondes * 0.8)) "journal du poste : $($secondes.Count) lignes à la seconde pour $Secondes s"
-    $avecCible = @($secondes | Where-Object { $c = ($_ -split ',')[2]; $c -ne '' -and [int]$c -ge 0 }).Count
-    Dis ($avecCible -ge [int]($secondes.Count * 0.8)) "cible du site (127.0.0.1) : $avecCible réponses sur $($secondes.Count) secondes"
+    $lignes = @(Get-ChildItem -Path $journal -Filter 'secondes-*.csv' -ErrorAction SilentlyContinue | ForEach-Object { [IO.File]::ReadAllLines($_.FullName) } | Where-Object { $_ -match '^\d{4}-' })
+    Dis ($lignes.Count -ge [int]($Secondes * 0.8)) "journal du poste : $($lignes.Count) lignes à la seconde pour $Secondes s"
+    $avecCible = @($lignes | Where-Object { $c = ($_ -split ',')[2]; $c -ne '' -and [int]$c -ge 0 }).Count
+    Dis ($avecCible -ge [int]($lignes.Count * 0.8)) "cible du site (127.0.0.1) : $avecCible réponses sur $($lignes.Count) secondes"
     $minutes = @()
     if (Test-Path (Join-Path $journal 'minutes.jsonl')) { $minutes = @([IO.File]::ReadAllLines((Join-Path $journal 'minutes.jsonl')) | Where-Object { $_ }) }
     Dis ($minutes.Count -ge 1) "journal du poste : $($minutes.Count) résumé(s) par minute"
@@ -148,7 +148,7 @@ try {
             Write-Output '--- fin du dernier envoi ---'
         }
     }
-    if ($secondes.Count -eq 0) {
+    if ($lignes.Count -eq 0) {
         # Rien d'écrit : la veille s'est arrêtée. La relancer ici montre pourquoi.
         Write-Output "INFO   dernier résultat de la tâche : $((Get-ScheduledTaskInfo -TaskName $tache).LastTaskResult)"
         Stop-ScheduledTask -TaskName $tache -ErrorAction SilentlyContinue
@@ -166,7 +166,7 @@ try {
     Start-Sleep -Seconds 2
     Dis (-not (Get-ScheduledTask -TaskName $tache -ErrorAction SilentlyContinue)) "tâche $tache retirée"
     Dis (-not (Test-Path $dossier)) 'dossier de la veille retiré'
-    Dis ((Get-Veille).Count -eq 0) 'plus aucune veille en cours'
+    Dis (@(Get-Veille).Count -eq 0) 'plus aucune veille en cours'
 } catch {
     Dis $false "essai interrompu : $($_.Exception.Message) (ligne $($_.InvocationInfo.ScriptLineNumber))"
 } finally {
