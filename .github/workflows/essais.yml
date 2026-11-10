@@ -1,0 +1,40 @@
+# Les essais d'une PR, avant la fusion : les tests du relais, puis les scripts
+# du poste sous le vrai Windows PowerShell 5.1, sur la machine Windows jetable
+# de GitHub. La veille réseau y est posée par la commande du relais, tourne
+# deux minutes sous le compte SYSTEM, envoie à un faux AVDiagram, puis est
+# retirée (scripts/essai-veille.ps1).
+name: Essais
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: essais-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  relais:
+    name: Tests du relais
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tests du worker
+        working-directory: worker
+        run: python3 -m unittest discover -s tests
+
+  windows:
+    name: Scripts du poste sous Windows PowerShell 5.1
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Syntaxe et envoi de chaque script
+        shell: cmd
+        run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\essai-windows.ps1
+      - name: Veille réseau, pose, deux minutes de veille, envoi, retrait
+        shell: cmd
+        run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\essai-veille.ps1 -Jetable
