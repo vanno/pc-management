@@ -1,6 +1,7 @@
 <#
-  Pose ou retire l'envoi à la console régie locale (agent/console.ps1) dans
-  le dossier de la sonde. Lancé par l'agent MeshCentral (compte SYSTEM) juste
+  Pose ou retire l'envoi à la console régie locale (agent/console.ps1) et la
+  lecture de vMix (agent/vmix.ps1, dans $VmixSource) dans le dossier de la
+  sonde. Lancé par l'agent MeshCentral (compte SYSTEM) juste
   après la pose de la sonde, à part de pilote.ps1 pour rester sous la longueur
   de commande. Compatible Windows PowerShell 5.1.
 
@@ -23,6 +24,16 @@ function Write-Utf8([string]$Chemin, [string]$Texte) {
 try {
     $p = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($env:PNPL_PARAMS)) | ConvertFrom-Json
     $consoles = @($p.consoles | Where-Object { $_ })
+    $vmix = ''
+    if ($p.actif -and $VmixSource) {
+        # La lecture de vMix, à côté de la sonde, posée même sans console.
+        if (-not (Test-Path (Join-Path $dossier 'config.json'))) { throw 'la sonde n''est pas installée sur ce poste' }
+        # Avec BOM : PowerShell 5.1 lit sinon les accents en ANSI.
+        [IO.File]::WriteAllText((Join-Path $dossier 'vmix.ps1'), $VmixSource, (New-Object System.Text.UTF8Encoding $true))
+        $vmix = ', lecture de vMix posée'
+    } elseif (-not $p.actif) {
+        Remove-Item -Path (Join-Path $dossier 'vmix.ps1') -ErrorAction SilentlyContinue
+    }
     if ($p.actif -and $consoles.Count) {
         if (-not (Test-Path (Join-Path $dossier 'config.json'))) { throw 'la sonde n''est pas installée sur ce poste' }
         foreach ($c in $consoles) {
@@ -33,12 +44,12 @@ try {
         Remove-Item -Path (Join-Path $dossier 'console-vue.json') -ErrorAction SilentlyContinue
         $noms = ($consoles | ForEach-Object { [string]$_.nom }) -join ', '
         $result.ok = $true
-        $result.detail = "console régie posée : $noms"
+        $result.detail = "console régie posée : $noms$vmix"
     } else {
         foreach ($f in 'console.ps1', 'console.json', 'console-vue.json') { Remove-Item -Path (Join-Path $dossier $f) -ErrorAction SilentlyContinue }
         Get-ChildItem -Path $dossier -Filter 'regie-*.dll' -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
         $result.ok = $true
-        $result.detail = 'aucune console régie'
+        $result.detail = "aucune console régie$vmix"
     }
 } catch {
     $result.ok = $false

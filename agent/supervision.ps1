@@ -18,6 +18,9 @@
       down = true (état dans liens.json) : c'est le seul regard sur le câble
       quand le switch n'est pas manageable.
 
+  Avec vmix.ps1 posé à côté (console-pose.ps1), chaque mesure porte aussi
+  l'état de vMix s'il tourne : stream, enregistrement, entrées, journal.
+
   Avec une console régie posée (console.ps1, lot 1 de la console), chaque
   mesure part aussi vers elle sur le LAN dès qu'elle est prise, sans attendre
   internet. Une panne de la console ne change rien à l'envoi vers AVDiagram.
@@ -176,6 +179,8 @@ foreach ($k in 1, 2) {
     $apres = Get-Compteurs
     $maintenant = Get-Date
     $m = Get-Mesure $avant $apres ($maintenant - $t).TotalSeconds
+    $vm = Join-Path $dir 'vmix.ps1'
+    if (Test-Path $vm) { try { $x = & $vm; if ($x) { $m.vmix = $x } } catch { } }
     $mesures += , $m
     if ($k -eq 1) { Send-Regie $m }
     $avant = $apres

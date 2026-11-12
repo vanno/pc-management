@@ -74,10 +74,15 @@ class SupervisionConsoleTests(unittest.TestCase):
         out = pilot.supervision(mesh, "node//pn09", "u1", {"actif": True}, FakeAvd(), nonces(), reference=reference)
         return out, mesh, scripts
 
-    def test_without_console_nothing_changes(self):
-        (ok, text), mesh, _ = self.install({"supervision": [{"ok": True, "detail": "sonde installée"}]})
-        self.assertEqual((ok, text), (True, "Sonde installée"))
-        self.assertEqual(len(mesh.calls), 1)
+    def test_without_console_only_vmix_is_posed(self):
+        (ok, text), mesh, scripts = self.install({
+            "supervision": [{"ok": True, "detail": "sonde installée"}],
+            "console": [{"ok": True, "detail": "aucune console régie, lecture de vMix posée"}],
+        })
+        self.assertEqual((ok, text), (True, "Sonde installée. Aucune console régie, lecture de vMix posée"))
+        self.assertEqual(len(mesh.calls), 2)
+        self.assertEqual(mesh.calls[1][0]["consoles"], [])
+        self.assertTrue(scripts[1].startswith("$VmixSource = @'\n"))
 
     def test_console_posed_after_the_probe(self):
         self.path.write_text(json.dumps({"consoles": [{"code": code(), "adresse": "192.168.1.20"}]}), encoding="utf-8")
@@ -91,8 +96,10 @@ class SupervisionConsoleTests(unittest.TestCase):
         self.assertEqual((body["op"], body["actif"], body["reference"]), ("console", True, "PN09"))
         self.assertEqual(body["consoles"][0]["jeton"], regie.probe_token(SECRET, "PN09"))
         self.assertEqual(body["consoles"][0]["adresse"], "192.168.1.20")
-        # console.ps1 voyage dans $RegieSource, en tête de console-pose.ps1.
-        self.assertTrue(scripts[1].startswith("$RegieSource = @'\n"))
+        # vmix.ps1 et console.ps1 voyagent dans $VmixSource et $RegieSource, en tête de console-pose.ps1.
+        self.assertTrue(scripts[1].startswith("$VmixSource = @'\n"))
+        self.assertIn("\n$RegieSource = @'\n", scripts[1])
+        self.assertIn("127.0.0.1:8088/api", scripts[1])
         self.assertIn("PointeNoire.Regie", scripts[1])
         self.assertIn("ServerCertificateValidationCallback", scripts[1])
 
@@ -103,7 +110,7 @@ class SupervisionConsoleTests(unittest.TestCase):
             "console": [{"ok": False, "detail": "la sonde n'est pas installée sur ce poste"}],
         })
         self.assertTrue(ok)
-        self.assertIn("Console régie pas posée : la sonde n'est pas installée", text)
+        self.assertIn("Console régie et lecture de vMix pas posées : la sonde n'est pas installée", text)
 
     def test_unreadable_config_stops_before_touching_the_device(self):
         self.path.write_text("{", encoding="utf-8")
@@ -120,7 +127,7 @@ class SupervisionConsoleTests(unittest.TestCase):
     def test_command_fits(self):
         consoles = regie.for_probe([{**regie.decode(code()), "adresse": "192.168.1.20"}] * 4, "PN-UK")
         cmd = pilot.build_command({"op": "console", "actif": True, "reference": "PN-UK", "consoles": consoles}, "ab12",
-                                  pilot.with_source(pilot.CONSOLE_INSTALLER.read_text(encoding="utf-8"), pilot.CONSOLE_SCRIPT, "RegieSource"))
+                                  pilot.probe_extras())
         self.assertLess(len(cmd), pilot.MAX_COMMAND)
 
 

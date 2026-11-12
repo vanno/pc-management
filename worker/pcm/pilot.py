@@ -64,6 +64,7 @@ CHECK_SCRIPT = Path(__file__).resolve().parents[2] / "agent" / "controle.ps1"
 # L'envoi à la console régie locale, posé dans le dossier de la sonde.
 CONSOLE_SCRIPT = Path(__file__).resolve().parents[2] / "agent" / "console.ps1"
 CONSOLE_INSTALLER = Path(__file__).resolve().parents[2] / "agent" / "console-pose.ps1"
+VMIX_SCRIPT = Path(__file__).resolve().parents[2] / "agent" / "vmix.ps1"
 # Ce qui reste sur un poste après la commande qui l'a posé : l'écran (fond et
 # relevé du mode événement) et le mur. Après une mise à jour du relais, ces
 # scripts gardent leur ancienne version jusqu'à leur prochaine pose.
@@ -72,7 +73,7 @@ CONSOLE_INSTALLER = Path(__file__).resolve().parents[2] / "agent" / "console-pos
 POSED = {
     "fond": (WALLPAPER_SCRIPT, WALLPAPER_INSTALLER, SURVEY_SCRIPT, SURVEY_INSTALLER),
     "vignette": (THUMBNAIL_SCRIPT, THUMBNAIL_INSTALLER),
-    "supervision": (PROBE_SCRIPT, CONSOLE_SCRIPT, CONSOLE_INSTALLER),
+    "supervision": (PROBE_SCRIPT, CONSOLE_SCRIPT, CONSOLE_INSTALLER, VMIX_SCRIPT),
 }
 MESSAGE_KINDS = ("toast", "boite")
 MESSAGE_MAX = 500
@@ -333,6 +334,14 @@ def diagnostic(mesh: MeshCtrl, device_id: str, params: dict, new_nonce: Callable
             if re.fullmatch(r"[A-Za-z0-9.-]{1,253}", t["hote"]):
                 targets.append({"hote": t["hote"], "port": t["port"]})
     body = {"op": "diagnostic", "debit": params.get("debit") is True, "scan": params.get("scan") is True, "cibles": targets[:16]}
+    # Le test de sortie : le point d'entrée de la plateforme, jamais sa clé de stream.
+    out = params.get("sortie")
+    if isinstance(out, dict) and out.get("protocole") in ("rtmp", "rtmps", "srt") and isinstance(out.get("hote"), str) and isinstance(out.get("port"), int) and 0 < out["port"] < 65536:
+        if re.fullmatch(r"[A-Za-z0-9.-]{1,253}", out["hote"]):
+            body["sortie"] = {"protocole": out["protocole"], "hote": out["hote"], "port": out["port"]}
+            prevu = params.get("prevu_mbps")
+            if isinstance(prevu, (int, float)) and not isinstance(prevu, bool) and 0 < prevu < 1000:
+                body["sortie"]["prevu_mbps"] = prevu
     try:
         # Un script à part : pilote.ps1 reste sous la longueur de commande de l'agent.
         reply = call(mesh, device_id, body, new_nonce, timeout=DIAGNOSTIC_TIMEOUT, script=script or DIAGNOSTIC_SCRIPT.read_text(encoding="utf-8"))
@@ -376,19 +385,25 @@ def supervision(mesh: MeshCtrl, device_id: str, unit_id: str, params: dict, avd,
         return False, f"AVDiagram : {exc}"
     detail = reply.get("detail") or ""
     text = detail[:1].upper() + detail[1:]
-    if not reply.get("ok") or not consoles:
+    if not reply.get("ok") or not params["actif"]:
         return bool(reply.get("ok")), text
     # La pose de la sonde retire une console posée avant (pilote.ps1), son
     # retrait emporte tout le dossier : seule une console connue est reposée.
-    body = {"op": "console", "actif": True, "reference": reference.upper(), "consoles": regie.for_probe(consoles, reference)}
+    # La lecture de vMix suit le même chemin, même sans console.
+    body = {"op": "console", "actif": True, "reference": reference.upper(), "consoles": regie.for_probe(consoles, reference) if consoles else []}
     try:
-        second = call(mesh, device_id, body, new_nonce, script=with_source(CONSOLE_INSTALLER.read_text(encoding="utf-8"), CONSOLE_SCRIPT, "RegieSource"))
+        second = call(mesh, device_id, body, new_nonce, script=probe_extras())
     except (MeshError, PilotError) as exc:
-        return True, f"{text}. Console régie pas posée : {exc}"
+        return True, f"{text}. Console régie et lecture de vMix pas posées : {exc}"
     extra = second.get("detail") or "pas de réponse"
     if not second.get("ok"):
-        return True, f"{text}. Console régie pas posée : {extra}"
+        return True, f"{text}. Console régie et lecture de vMix pas posées : {extra}"
     return True, f"{text}. {extra[:1].upper() + extra[1:]}"
+
+
+def probe_extras() -> str:
+    """console-pose.ps1 avec console.ps1 et vmix.ps1 en tête."""
+    return with_source(with_source(CONSOLE_INSTALLER.read_text(encoding="utf-8"), CONSOLE_SCRIPT, "RegieSource"), VMIX_SCRIPT, "VmixSource")
 
 
 def wallpaper(mesh: MeshCtrl, device_id: str, reference: str, params: dict, new_nonce: Callable[[], str], script: str | None = None) -> tuple[bool, str] | tuple[bool, str, dict]:
