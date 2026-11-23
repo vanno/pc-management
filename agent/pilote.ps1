@@ -565,7 +565,12 @@ $planEleve = '8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c'
 # démonstration en magasin, fax, géolocalisation. Rien de ce dont vMix, NDI,
 # Office ou MeshCentral ont besoin (Defender, pare-feu, Windows Update, la
 # recherche, les manettes restent tels quels).
-$servicesNettoyage = @('DiagTrack', 'dmwappushservice', 'MapsBroker', 'RetailDemo', 'XblAuthManager', 'XblGameSave', 'XboxNetApiSvc', 'Fax', 'lfsvc')
+# Lenovo Vantage et son installateur (ImController) : sur PN01, le 2026-11-23,
+# sa messagerie lancée dans la session avec l'environnement de SYSTEM ouvrait
+# une fenêtre WebView2 « répertoire de données impossible »
+# (C:\Windows\SystemTemp\EBWebView) par-dessus le fond d'état. Les touches Fn
+# (LenovoFnAndFunctionKeys) restent. Absents des autres marques : ignorés.
+$servicesNettoyage = @('DiagTrack', 'dmwappushservice', 'MapsBroker', 'RetailDemo', 'XblAuthManager', 'XblGameSave', 'XboxNetApiSvc', 'Fax', 'lfsvc', 'LenovoVantageService', 'ImControllerService')
 $tachesNettoyage = @(
     '\Microsoft\Windows\Application Experience\Microsoft Compatibility Appraiser',
     '\Microsoft\Windows\Application Experience\ProgramDataUpdater',
