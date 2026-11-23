@@ -373,7 +373,10 @@ compressé (gzip puis base64) comme les autres scripts.
   les 15 minutes et après chaque commande du pilote. L'icône « État du poste »
   du Bureau public ouvre le détail en local. Le fond d'origine de chaque compte
   est gardé dans `%LOCALAPPDATA%\PointeNoire\fond-avant.json` et rendu au
-  retrait ; un compte fermé le retrouve à sa prochaine session, la tâche part
+  retrait (à la sortie du mode événement aussi, quand le fond n'était posé que
+  pour lui). Si ce fond d'origine est introuvable, un fond gris uni le
+  remplace : l'image « Mode événement » ne reste jamais figée, et le retrait
+  est en échec tant qu'un écran la montre encore. Un compte fermé le retrouve à sa prochaine session, la tâche part
   7 jours après. Windows à la une remettrait sa photo par-dessus : il est
   coupé pendant le fond d'état (`BackgroundType` et `DesktopSpotlight`) et
   rendu au retrait. Chaque passage relit le fond que Windows affiche et écrit
