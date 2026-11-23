@@ -32,6 +32,12 @@ REBOOT_FOR_INSTALL = 0x8A15010A - 2**32
 PACKAGE_IN_USE_BY_APPLICATION = 0x8A150111 - 2**32
 
 
+# winget ne se lance pas du tout (step « probe » du script, ou ce code sur un
+# ancien script) : la même panne pour tous les logiciels, dite une seule fois.
+DLL_NOT_FOUND = 0xC0000135 - 2**32
+WINGET_DOWN = "winget ne démarre pas sur le poste"
+
+
 class SoftwareError(ValueError):
     pass
 
@@ -51,6 +57,11 @@ class Outcome:
     @property
     def ok(self) -> bool:
         return self.state != "failed"
+
+    @property
+    def winget_down(self) -> bool:
+        """winget absent ou qui ne se lance pas : inutile d'essayer les logiciels suivants."""
+        return self.state == "failed" and (self.detail.startswith(WINGET_DOWN) or self.detail.startswith("winget introuvable"))
 
 
 def load_profile(path: str | Path) -> list[Package]:
@@ -113,6 +124,10 @@ def classify(package: Package, reply: dict) -> Outcome:
     code = reply.get("code")
     step = reply.get("step")
     tail = str(reply.get("output") or "")[:300]
+    if step == "probe" or code == DLL_NOT_FOUND:
+        shown = f"0x{code & 0xFFFFFFFF:08X}" if isinstance(code, int) else str(code)
+        why = ", DLL introuvable" if code == DLL_NOT_FOUND else ""
+        return Outcome(package, "failed", f"{WINGET_DOWN} (code {shown}{why})")
     if code == 0:
         return Outcome(package, "installed" if step == "install" else "updated")
     if code in (UPDATE_NOT_APPLICABLE, PACKAGE_ALREADY_INSTALLED):
@@ -131,6 +146,20 @@ def classify(package: Package, reply: dict) -> Outcome:
     return Outcome(package, "failed", f"code {shown}" + (f" : {tail}" if tail else ""))
 
 
+def install_all(mesh, device_id: str, packages: list[Package], new_nonce, script: str | None = None, on_outcome=None) -> list[Outcome]:
+    """Les logiciels winget un à un. Si winget ne se lance pas, on s'arrête au
+    premier : les suivants échoueraient tous pour la même raison."""
+    outcomes: list[Outcome] = []
+    for package in packages:
+        o = install(mesh, device_id, package, new_nonce(), script)
+        if on_outcome:
+            o = on_outcome(package, o) or o
+        outcomes.append(o)
+        if o.winget_down:
+            break
+    return outcomes
+
+
 def install(mesh, device_id: str, package: Package, nonce: str, script: str | None = None) -> Outcome:
     """Installe ou met à jour un logiciel sur le poste. Une panne devient un échec du logiciel."""
     from .meshctrl import MeshError
@@ -145,8 +174,16 @@ def install(mesh, device_id: str, package: Package, nonce: str, script: str | No
 LABELS = {"installed": "installé", "updated": "mis à jour", "uptodate": "à jour", "reboot": "redémarrage demandé", "failed": "en échec"}
 
 
-def summary(outcomes: list[Outcome]) -> str:
+def summary(outcomes: list[Outcome], total_winget: int = 0) -> str:
     """Une phrase pour la page Postes : les nombres, puis le détail de ce qui demande un geste."""
+    down = next((o for o in outcomes if o.winget_down), None)
+    if down is not None:
+        total = total_winget or len(outcomes)
+        text = f"{down.detail} : {total} logiciel{'s' if total > 1 else ''} winget non traité{'s' if total > 1 else ''}"
+        rest = [o for o in outcomes if o is not down]
+        if rest:
+            text += ". Autres : " + summary(rest)
+        return text
     counts: dict[str, int] = {}
     for o in outcomes:
         counts[o.state] = counts.get(o.state, 0) + 1

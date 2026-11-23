@@ -227,6 +227,12 @@ Une tâche « logiciels » reste « En cours » jusqu'à 3 heures avant de passe
 
 Points connus :
 
+- winget est lancé en compte SYSTEM (MeshCentral), cas que Microsoft ne prend
+  pas en charge. Sur un poste sans runtime Visual C++, il ne se lance pas
+  (0xC0000135, DLL introuvable). `agent/winget.ps1` teste `winget --version`
+  d'abord ; le worker s'arrête au premier échec de ce test et rend une seule
+  phrase au lieu d'une erreur par logiciel. Les installeurs du NAS passent
+  quand même. Geste : installer « Visual C++ 2015-2022 x64 » sur le poste.
 - Une mise à jour ferme le logiciel ouvert : à ne pas lancer sur un poste en
   cours d'événement.
 - Adobe Creative Cloud installe le lanceur seul. Premiere Pro, After Effects,

@@ -30,6 +30,7 @@ class FakeMesh:
         self.commands = []
         self.packages = []
         self.winget_codes = {}
+        self.winget_probe = None
         self.event = False
         self.pilot_ops = []
         self.pilot_scripts = []
@@ -102,6 +103,8 @@ class FakeMesh:
             nonce = command.split("$env:PNWG_NONCE='", 1)[1].split("'", 1)[0]
             pkg = command.split("$env:PNWG_ID='", 1)[1].split("'", 1)[0]
             self.packages.append((pkg, timeout))
+            if self.winget_probe is not None:
+                return winget_output(nonce, id=pkg, step="probe", code=self.winget_probe)
             code = self.winget_codes.get(pkg, 0)
             return winget_output(nonce, id=pkg, step="install", code=code)
         nonce = command.split("$env:PNINV_NONCE='", 1)[1].split("'", 1)[0]
@@ -200,6 +203,25 @@ class ServiceTests(unittest.TestCase):
         self.assertIn("2 logiciels : 1 installé, 1 en échec", result)
         self.assertIn("Zoom (logiciel ouvert", result)
         self.assertIn("Fiche à jour", result)
+
+    def test_winget_that_does_not_start_is_said_once(self):
+        folder = Path(self.tmp.name) / "installeurs"
+        folder.mkdir()
+        (folder / "vmix29.exe").write_bytes(b"x")
+        cfg = Path(self.tmp.name) / "installeurs.json"
+        cfg.write_text(json.dumps({"installeurs": [{"nom": "vMix", "fichier": "vmix29.exe", "detection": "vMix*"}]}))
+        avd = FakeAvd([task(action="logiciels")])
+        mesh = FakeMesh([PN01])
+        mesh.winget_probe = sw.DLL_NOT_FOUND
+        svc = self.service(mesh, avd, profile_path=self.profile(["VideoLAN.VLC", "Zoom.Zoom", "Mozilla.Firefox"]), installers_path=str(cfg), installers_dir=str(folder))
+        svc.tick()
+        # Un seul essai winget, puis les installeurs du NAS, qui n'en ont pas besoin.
+        self.assertEqual([p[0] for p in mesh.packages], ["VideoLAN.VLC", "check", "upload", "install"])
+        (_, ok, result), = avd.finished
+        self.assertFalse(ok)
+        self.assertTrue(result.startswith("winget ne démarre pas sur le poste (code 0xC0000135, DLL introuvable) : 3 logiciels winget non traités"), result)
+        self.assertIn("Autres : 1 logiciel : 1 redémarrage demandé", result)
+        self.assertEqual(result.count("0xC0000135"), 1)
 
     def test_software_task_runs_nas_installers_after_winget(self):
         folder = Path(self.tmp.name) / "installeurs"

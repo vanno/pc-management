@@ -481,12 +481,11 @@ class Service:
         if refused:
             # La mise à jour de la semaine laisse un poste d'événement tranquille, sans échec.
             return (True, "Ignoré : mode événement.") if scheduled else (False, refused)
-        outcomes = []
-        for package in packages:
-            outcomes.append(self._logged(tag, package.id, sw.install(self.mesh, device.id, package, inv.new_nonce())))
+        # winget qui ne se lance pas arrête la liste winget au premier logiciel ; les installeurs du NAS passent quand même.
+        outcomes = sw.install_all(self.mesh, device.id, packages, inv.new_nonce, on_outcome=lambda p, o: self._logged(tag, p.id, o))
         for inst in installers:
             outcomes.append(self._logged(tag, inst.name, ins.install(self.mesh, device.id, inst, inv.new_nonce)))
-        text = sw.summary(outcomes)
+        text = sw.summary(outcomes, len(packages))
         inv_ok, inv_text = self.inventory(device, tag)
         text += ". Fiche à jour" if inv_ok else f". Inventaire après installation impossible : {inv_text}"
         return all(o.ok for o in outcomes), _short(text)
