@@ -30,6 +30,9 @@ INSTALL_IN_PROGRESS = 0x8A150102 - 2**32
 REBOOT_TO_FINISH = 0x8A150109 - 2**32
 REBOOT_FOR_INSTALL = 0x8A15010A - 2**32
 PACKAGE_IN_USE_BY_APPLICATION = 0x8A150111 - 2**32
+# L'éditeur a remplacé l'installeur à la même adresse (Chrome, par exemple) :
+# la fiche winget n'est pas encore à jour et refuse le fichier téléchargé.
+INSTALLER_HASH_MISMATCH = 0x8A150011 - 2**32
 
 
 # winget ne se lance pas du tout (step « probe » du script, ou ce code sur un
@@ -136,6 +139,8 @@ def classify(package: Package, reply: dict) -> Outcome:
         return Outcome(package, "reboot", "redémarrage demandé")
     if code in (PACKAGE_IN_USE, PACKAGE_IN_USE_BY_APPLICATION):
         return Outcome(package, "failed", "logiciel ouvert sur le poste, fermez-le et relancez")
+    if code == INSTALLER_HASH_MISMATCH:
+        return Outcome(package, "failed", "l'éditeur a remplacé son installeur et la fiche winget n'est pas encore à jour : relancez demain, code 0x8A150011")
     if code == INSTALL_IN_PROGRESS:
         return Outcome(package, "failed", "une autre installation est en cours sur le poste")
     if code == NO_APPLICATIONS_FOUND:
