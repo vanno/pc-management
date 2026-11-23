@@ -228,11 +228,18 @@ Une tâche « logiciels » reste « En cours » jusqu'à 3 heures avant de passe
 Points connus :
 
 - winget est lancé en compte SYSTEM (MeshCentral), cas que Microsoft ne prend
-  pas en charge. Sur un poste sans runtime Visual C++, il ne se lance pas
-  (0xC0000135, DLL introuvable). `agent/winget.ps1` teste `winget --version`
-  d'abord ; le worker s'arrête au premier échec de ce test et rend une seule
-  phrase au lieu d'une erreur par logiciel. Les installeurs du NAS passent
-  quand même. Geste : installer « Visual C++ 2015-2022 x64 » sur le poste.
+  pas en charge. winget.exe est une application empaquetée : ses DLL
+  (vcruntime140_app.dll…) viennent du paquet cadre
+  Microsoft.VCLibs.140.00.UWPDesktop, que Windows ne met dans le chemin de
+  recherche que pour un compte où le paquet est inscrit, jamais SYSTEM. Sans
+  rien de plus, winget plante en 0xC0000135 (DLL introuvable), même avec le
+  runtime « Visual C++ 2015-2022 » installé (constaté sur PN05 le 2026-11-23).
+  `agent/winget.ps1` ajoute donc les dossiers des paquets VCLibs et UI.Xaml au
+  PATH du processus, puis teste `winget --version` ; le worker s'arrête au
+  premier échec de ce test et rend une seule phrase, avec les paquets cadres
+  trouvés. Les installeurs du NAS passent quand même. Si l'échec reste, la voie
+  prise en charge par Microsoft en SYSTEM est le module PowerShell
+  Microsoft.WinGet.Client.
 - Une mise à jour ferme le logiciel ouvert : à ne pas lancer sur un poste en
   cours d'événement.
 - Adobe Creative Cloud installe le lanceur seul. Premiere Pro, After Effects,
