@@ -280,20 +280,49 @@ if (-not $ecrans.Count) {
     $bilan = 'aucun écran actif dans cette session, rien à changer'
 } elseif ($s.retire) {
     $avant = Read-Json $avantFichier
-    if ($avant) {
-        foreach ($e in $ecrans) {
+    $rendus = 0; $unis = 0
+    foreach ($e in $ecrans) {
+        $f = $null
+        if ($avant) {
             $f = ($avant.ecrans | Where-Object id -eq $e.id | Select-Object -First 1).fond
             if (-not $f) { $f = $avant.defaut }
-            if ($f -and (Test-Path $f)) { [PointeNoire.Ecrans]::Poser($e.id, $f) }
         }
+        # Une de nos images gardée comme « fond d'origine » ne se rend pas : elle est effacée plus bas.
+        if ($f -and (Test-Path $f) -and [IO.Path]::GetFileName($f) -notlike 'fond-*.png') {
+            try { [PointeNoire.Ecrans]::Poser($e.id, $f); $rendus++; continue } catch { }
+        }
+        # Le fond d'origine introuvable : un fond uni, plutôt que l'image figée
+        # du fond d'état (PN01, le 2026-11-23 : « MODE ÉVÉNEMENT » resté affiché
+        # des heures après la sortie du mode).
+        if ([IO.Path]::GetFileName([PointeNoire.Ecrans]::Lire($e.id)) -like 'fond-*.png') {
+            $uni = Join-Path $perso "uni-$($e.l)x$($e.h).png"
+            if (-not (Test-Path $uni)) {
+                $bmp = New-Object Drawing.Bitmap ([Math]::Max(640, $e.l)), ([Math]::Max(480, $e.h))
+                $g = [Drawing.Graphics]::FromImage($bmp)
+                $g.Clear([Drawing.Color]::FromArgb(32, 32, 32))
+                $g.Dispose()
+                $bmp.Save($uni, [Drawing.Imaging.ImageFormat]::Png)
+                $bmp.Dispose()
+            }
+            [PointeNoire.Ecrans]::Poser($e.id, $uni)
+            $unis++
+        }
+    }
+    if ($avant) {
         [PointeNoire.Ecrans]::Placer([int]$avant.position)
         # Windows à la une, s'il était là avant le fond d'état.
         if ($null -ne $avant.une -and (Test-Path $cleUne)) { Set-ItemProperty -Path $cleUne -Name EnabledState -Value ([int]$avant.une) -Type DWord }
         if ($null -ne $avant.type) { Set-ItemProperty -Path $cleFonds -Name BackgroundType -Value ([int]$avant.type) -Type DWord }
         Remove-Item $avantFichier -Force
-        $bilan = 'fond d''origine rendu'
-    } else { $bilan = 'pas de fond d''état dans cette session' }
+    }
     Get-ChildItem $perso -Filter 'fond-*.png' -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
+    # La preuve : plus aucun écran ne montre une image du fond d'état.
+    $restes = @($ecrans | Where-Object { [IO.Path]::GetFileName([PointeNoire.Ecrans]::Lire($_.id)) -like 'fond-*.png' }).Count
+    if ($restes) { throw "le fond d'état reste affiché sur $restes écran(s) sur $($ecrans.Count)" }
+    $bilan = $(if ($unis -and $rendus) { "fond d'origine rendu sur $rendus écran(s), fond uni sur $unis (fond d'origine introuvable)" }
+        elseif ($unis) { "fond uni posé sur $unis écran(s) : le fond d'origine est introuvable" }
+        elseif ($avant) { 'fond d''origine rendu' }
+        else { 'pas de fond d''état dans cette session' })
 } else {
 
 # Le fond d'origine, une seule fois : c'est lui que le retrait rend.
