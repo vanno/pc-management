@@ -490,6 +490,9 @@ function Invoke-Script($p) {
     try {
         $proc = Start-Process -FilePath 'powershell.exe' -ArgumentList @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', "`"$fichier`"") `
             -RedirectStandardOutput $sortie -RedirectStandardError $erreurs -WindowStyle Hidden -PassThru
+        # Windows PowerShell 5.1 : sans lire Handle tout de suite, ExitCode reste vide
+        # une fois le processus fini, et un script réussi passait pour un échec.
+        $null = $proc.Handle
         $fini = $proc.WaitForExit($delai * 1000)
         if (-not $fini) {
             & taskkill.exe /PID $proc.Id /T /F | Out-Null
@@ -512,8 +515,12 @@ function Invoke-Script($p) {
         } elseif ($result.code -eq 0) {
             $result.ok = $true
             $result.detail = 'script terminé (code 0), avec des erreurs écrites'
+        } elseif ($null -eq $result.code) {
+            $result.detail = 'code de sortie illisible : voir la sortie et les erreurs'
+            if ($err.Trim()) { $result.detail += " ($(Get-Fin $err 200))" }
         } else {
             $result.detail = "le script a rendu le code $($result.code)"
+            if ($err.Trim()) { $result.detail += " : $(Get-Fin $err 200)" }
         }
     } finally {
         Remove-Item -Path $fichier, $sortie, $erreurs -Force -ErrorAction SilentlyContinue
