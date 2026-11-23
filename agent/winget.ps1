@@ -45,14 +45,27 @@ if (-not $winget) {
 }
 $wg = $winget.FullName
 
-# winget peut être présent sans pouvoir se lancer : 0xC0000135 (DLL introuvable)
-# en compte SYSTEM quand le runtime Visual C++ manque. On le dit une fois, sans
-# rien tenter sur le logiciel.
+# winget.exe est une application empaquetée : ses DLL (vcruntime140_app.dll…)
+# viennent du paquet cadre Microsoft.VCLibs.140.00.UWPDesktop, que Windows ajoute
+# au chemin de recherche seulement pour un compte où le paquet est inscrit. En
+# SYSTEM, il ne l'est jamais : winget plante en 0xC0000135 (DLL introuvable),
+# même avec le runtime Visual C++ « classique » installé. On ajoute donc le
+# dossier de ce paquet (et celui d'UI.Xaml) au PATH du processus.
+$cadres = foreach ($motif in 'Microsoft.VCLibs.140.00.UWPDesktop_*_x64__8wekyb3d8bbwe', 'Microsoft.VCLibs.140.00_*_x64__8wekyb3d8bbwe', 'Microsoft.UI.Xaml.2.8_*_x64__8wekyb3d8bbwe') {
+    Get-ChildItem -Path (Join-Path "$env:ProgramFiles\WindowsApps" $motif) -Directory |
+        Sort-Object -Property { $_.Name } | Select-Object -Last 1
+}
+$cadres = @($cadres | Where-Object { $_ })
+if ($cadres.Count) { $env:Path = (($cadres | ForEach-Object { $_.FullName }) -join ';') + ';' + $env:Path }
+
+# winget peut être présent sans pouvoir se lancer. On le dit une fois, avec les
+# paquets cadres trouvés, sans rien tenter sur le logiciel.
 $version = & $wg --version 2>&1 | Out-String
 if ($LASTEXITCODE -ne 0) {
     $result.step = 'probe'
     $result.code = $LASTEXITCODE
-    $result.output = $version.Trim()
+    $vus = if ($cadres.Count) { ($cadres | ForEach-Object { $_.Name }) -join ', ' } else { 'aucun paquet VCLibs dans WindowsApps' }
+    $result.output = ($version.Trim() + ' | cadres : ' + $vus).Trim(' |')
     Send-Result
     return
 }
