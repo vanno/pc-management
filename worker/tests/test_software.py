@@ -75,6 +75,19 @@ class ClassifyTests(unittest.TestCase):
         self.assertEqual(other.state, "failed")
         self.assertIn("0x80070005", other.detail)
 
+    def test_winget_that_does_not_start(self):
+        probe = self.state(step="probe", code=sw.DLL_NOT_FOUND, output="")
+        self.assertEqual(probe.detail, "winget ne démarre pas sur le poste (code 0xC0000135, DLL introuvable)")
+        self.assertTrue(probe.winget_down)
+        # Un ancien script, sans test de lancement : le même code sur l'installation.
+        self.assertTrue(self.state(step="install", code=sw.DLL_NOT_FOUND).winget_down)
+        self.assertTrue(self.state(step="none", code=-1, output="winget introuvable (App Installer absent du poste)").winget_down)
+        self.assertFalse(self.state(step="install", code=-2147024891).winget_down)
+
+    def test_summary_when_winget_is_down(self):
+        down = sw.Outcome(sw.Package("A", "A"), "failed", "winget ne démarre pas sur le poste (code 0xC0000135, DLL introuvable)")
+        self.assertEqual(sw.summary([down], 12), "winget ne démarre pas sur le poste (code 0xC0000135, DLL introuvable) : 12 logiciels winget non traités")
+
     def test_summary(self):
         outcomes = [
             sw.Outcome(sw.Package("A", "A"), "installed"),

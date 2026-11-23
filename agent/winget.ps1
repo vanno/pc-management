@@ -8,7 +8,8 @@
 
   Sortie : une seule ligne
       PNWG1:<jeton>:<JSON encodé en base64 UTF-8>
-  avec { id, step (install | upgrade | none), code, scope, output }.
+  avec { id, step (probe | install | upgrade | none), code, scope, output }.
+  step = probe : winget lui-même ne se lance pas.
   Le worker lit le code de sortie de winget et en déduit l'état.
 
   En compte SYSTEM, winget n'est pas dans le PATH : il est cherché dans le
@@ -43,6 +44,19 @@ if (-not $winget) {
     return
 }
 $wg = $winget.FullName
+
+# winget peut être présent sans pouvoir se lancer : 0xC0000135 (DLL introuvable)
+# en compte SYSTEM quand le runtime Visual C++ manque. On le dit une fois, sans
+# rien tenter sur le logiciel.
+$version = & $wg --version 2>&1 | Out-String
+if ($LASTEXITCODE -ne 0) {
+    $result.step = 'probe'
+    $result.code = $LASTEXITCODE
+    $result.output = $version.Trim()
+    Send-Result
+    return
+}
+
 $common = @('--id', $id, '--exact', '--accept-source-agreements', '--disable-interactivity')
 
 function Invoke-Winget([string[]]$Arguments) {

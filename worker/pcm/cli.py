@@ -123,14 +123,13 @@ def cmd_software(args, mesh: MeshCtrl) -> int:
             print(f"{d.name} : hors ligne")
             failed = True
             continue
-        outcomes = []
-        steps = [(p.id, lambda p=p: sw.install(mesh, d.id, p, inv.new_nonce())) for p in packages]
-        steps += [(i.name, lambda i=i: ins.install(mesh, d.id, i, inv.new_nonce)) for i in installers]
-        for label, run in steps:
-            o = run()
+        def show(label, o):
             print(f"{d.name} {label} : {sw.LABELS[o.state]}{' : ' + o.detail if o.detail else ''}", flush=True)
-            outcomes.append(o)
-        print(f"{d.name} : {sw.summary(outcomes)}")
+            return o
+
+        outcomes = sw.install_all(mesh, d.id, packages, inv.new_nonce, on_outcome=lambda p, o: show(p.id, o))
+        outcomes += [show(i.name, ins.install(mesh, d.id, i, inv.new_nonce)) for i in installers]
+        print(f"{d.name} : {sw.summary(outcomes, len(packages))}")
         failed = failed or not all(o.ok for o in outcomes)
     missing = wanted - {inv.asset_tag_for(d.name, mapping).upper() for d in devices}
     for tag in sorted(missing):
