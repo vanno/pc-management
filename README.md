@@ -679,7 +679,7 @@ montre le poste allégé avec la désinstallation en échec.
 | Partie | Effet | Annulation |
 |---|---|---|
 | Alimentation | copie du plan Performances optimales (sinon Performances élevées), mise en veille sélective USB et économie PCI Express coupées | plan d'avant réactivé, copie supprimée |
-| Services | DiagTrack, dmwappushservice, MapsBroker, RetailDemo, XblAuthManager, XblGameSave, XboxNetApiSvc, Fax, lfsvc désactivés | type de démarrage d'avant |
+| Services | DiagTrack, dmwappushservice, MapsBroker, RetailDemo, XblAuthManager, XblGameSave, XboxNetApiSvc, Fax, lfsvc désactivés ; sur les PC Lenovo, Lenovo Vantage (LenovoVantageService) et son installateur (ImControllerService), dont la messagerie ouvrait une fenêtre Edge « répertoire de données impossible » (SystemTemp\EBWebView), les touches Fn restant actives | type de démarrage d'avant |
 | Tâches | collecte de compatibilité, programme d'amélioration, retours, cartes, diagnostic disque | réactivées si elles l'étaient |
 | Réglages | télémétrie au minimum, enregistrement de jeu, applications suggérées, publicité, Cortana, widgets, démarrage rapide coupés | valeurs d'avant, ou supprimées |
 | Widgets | réglage `AllowNewsAndInterests` à 0 ; si le pilote UCPD de Windows 11 le refuse, il passe par la stratégie de groupe locale (Registry.pol écrit par le relais, `gpupdate /target:computer`), aussi sur Windows Famille sans gpedit ; si Windows ignore la stratégie, le paquet des widgets (`MicrosoftWindows.Client.WebExperience`) est retiré | entrée retirée de la stratégie locale ; paquet non réinstallé |
