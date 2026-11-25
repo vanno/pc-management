@@ -84,6 +84,9 @@ $valeursWU = @('PauseUpdatesStartTime', 'PauseUpdatesExpiryTime', 'PauseFeatureU
 $cleAU = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU'
 $reglagesVeille = @(@('SUB_SLEEP', 'STANDBYIDLE'), @('SUB_SLEEP', 'HIBERNATEIDLE'), @('SUB_VIDEO', 'VIDEOIDLE'))
 
+# Arrêt des services de mise à jour : agent/maj.ps1, envoyé devant ce script
+# pour le mode événement seulement (Stop-ServicesMaj, Start-ServicesMaj).
+
 function Get-Valeur([string]$Cle, [string]$Nom) {
     $v = Get-ItemProperty -Path $Cle -Name $Nom -ErrorAction SilentlyContinue
     if ($v) { return $v.$Nom }
@@ -149,7 +152,8 @@ function Set-Partie([string]$Partie, $Avant, [int]$Jours) {
             foreach ($n in @('PauseUpdatesStartTime', 'PauseFeatureUpdatesStartTime', 'PauseQualityUpdatesStartTime')) { Set-Valeur $cleWU $n $debut.ToString($f) 'String' }
             foreach ($n in @('PauseUpdatesExpiryTime', 'PauseFeatureUpdatesEndTime', 'PauseQualityUpdatesEndTime')) { Set-Valeur $cleWU $n $fin.ToString($f) 'String' }
             Set-Valeur $cleAU 'NoAutoRebootWithLoggedOnUsers' 1 'DWord'
-            "Windows Update en pause jusqu'au $($fin.ToLocalTime().ToString('dd/MM HH:mm'))"
+            $services = Stop-ServicesMaj $Avant
+            "Windows Update en pause jusqu'au $($fin.ToLocalTime().ToString('dd/MM HH:mm')), $services"
         }
         'veille' {
             $Avant.veille = @()
@@ -202,7 +206,8 @@ function Reset-Partie([string]$Partie, $Avant) {
         'windows_update' {
             foreach ($n in $valeursWU) { Set-Valeur $cleWU $n $Avant.wu.$n 'String' }
             Set-Valeur $cleAU 'NoAutoRebootWithLoggedOnUsers' $Avant.au 'DWord'
-            'Windows Update repris'
+            $services = Start-ServicesMaj $Avant
+            if ($services) { "Windows Update repris, $services" } else { 'Windows Update repris' }
         }
         'veille' {
             foreach ($v in @($Avant.veille)) { Set-Veille $v.sous $v.reglage ([long]$v.ac) ([long]$v.dc) }
@@ -261,11 +266,23 @@ function Enable-Evenement([int]$Jours, $Demande) {
     $etat = Read-Evenement
     if (-not $etat) { $etat = [pscustomobject]@{ depuis = (Get-Date).ToString('o'); parties = @() } }
     $nouvelles = @(Get-Parties $Demande | Where-Object { @($etat.parties) -notcontains $_ })
-    if (-not $nouvelles.Count) { $result.ok = $true; $result.detail = 'mode événement déjà actif'; return }
+    # Un mode posé avant l'arrêt des services : il les arrête à la relance.
+    $complement = $null
+    if (@($etat.parties) -contains 'windows_update' -and -not $etat.services -and @(Get-Parties $Demande) -contains 'windows_update') {
+        $avant = [ordered]@{ services = $null }
+        $complement = Stop-ServicesMaj $avant
+        $etat | Add-Member -NotePropertyName services -NotePropertyValue $avant.services -Force
+        Write-Utf8 $fichierEvenement ($etat | ConvertTo-Json -Depth 6)
+    }
+    if (-not $nouvelles.Count) {
+        $result.ok = $true
+        $result.detail = $(if ($complement) { "mode événement déjà actif : $complement" } else { 'mode événement déjà actif' })
+        return
+    }
     if (-not (Test-Path $base)) { New-Item -ItemType Directory -Path $base -Force | Out-Null }
     $faits = @()
     foreach ($partie in $nouvelles) {
-        $avant = [ordered]@{ wu = $null; au = $null; veille = $null; toasts = $null; global = $null; conseils = $null; fond = $null }
+        $avant = [ordered]@{ wu = $null; au = $null; services = $null; veille = $null; toasts = $null; global = $null; conseils = $null; fond = $null }
         $texte = Set-Partie $partie $avant $Jours
         foreach ($k in @($avant.Keys)) { if ($null -ne $avant[$k]) { $etat | Add-Member -NotePropertyName $k -NotePropertyValue $avant[$k] -Force } }
         $etat.parties = @(@($etat.parties) + $partie)
@@ -503,8 +520,11 @@ function Invoke-Script($p) {
         }
         $out = ''
         $err = ''
-        if (Test-Path $sortie) { $out = [IO.File]::ReadAllText($sortie) }
-        if (Test-Path $erreurs) { $err = [IO.File]::ReadAllText($erreurs) }
+        # Sortie redirigée de Windows PowerShell 5.1 : écrite dans la page de
+        # code OEM de la console (850 en français), pas en UTF-8.
+        $oem = [Text.Encoding]::GetEncoding([Globalization.CultureInfo]::CurrentCulture.TextInfo.OEMCodePage)
+        if (Test-Path $sortie) { $out = [IO.File]::ReadAllText($sortie, $oem) }
+        if (Test-Path $erreurs) { $err = [IO.File]::ReadAllText($erreurs, $oem) }
         $result.sortie = Get-Fin $out 2500
         $result.erreurs = Get-Fin $err 1000
         if (-not $fini) {

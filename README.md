@@ -335,7 +335,13 @@ compressé (gzip puis base64) comme les autres scripts.
   Il faut le Wake-on-LAN actif dans le BIOS et la carte réseau du poste.
 - Mode événement : Windows Update en pause 7 jours (clés `Pause*` de
   `HKLM\SOFTWARE\Microsoft\WindowsUpdate\UX\Settings`), pas de redémarrage
-  automatique, veille et extinction d'écran à 0 sur secteur et batterie,
+  automatique, services de mise à jour désactivés et arrêtés (`wuauserv`,
+  `UsoSvc`, `InstallService` : la pause ne retient ni le Microsoft Store ni les
+  définitions de Defender, et Windows Famille ignore les stratégies de Windows
+  Update ; la tâche `PointeNoire-Evenement` les recoupe toutes les 15 minutes,
+  puis s'efface au retour ; `agent/maj.ps1`, envoyé devant `pilote.ps1` pour
+  cette op seulement ; un mode posé avant arrête les services à la relance),
+  veille et extinction d'écran à 0 sur secteur et batterie,
   notifications coupées (`ToastEnabled` et `NOC_GLOBAL_SETTING_TOASTS_ENABLED`
   des comptes ouverts), conseils et suggestions de Windows coupés
   (`ContentDeliveryManager`, écran « Tirez le meilleur parti de Windows »).
@@ -425,6 +431,7 @@ partie (`nom`, `ok`, `constat`), que la tâche AVDiagram garde dans `controle` :
 | Partie | Ce qui est relu |
 |---|---|
 | Windows Update | la fin de pause dans `UX\Settings` (dans le futur) et `NoAutoRebootWithLoggedOnUsers` |
+| Services de mise à jour | `wuauserv`, `UsoSvc`, `InstallService` désactivés (`Start` = 4) et arrêtés, tâche `PointeNoire-Evenement` présente ; au retour, `Start` d'avant |
 | Veille | `powercfg /q` du plan actif, et une stratégie de groupe qui imposerait une durée (`Policies\Microsoft\Power\PowerSettings`) |
 | Notifications | le registre de chaque compte, puis Windows lui-même dans chaque session ouverte (`ToastNotificationManager`, réglage `DisabledForUser`) |
 | Conseils Windows | le registre de chaque compte |

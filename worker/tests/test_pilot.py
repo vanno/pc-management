@@ -494,6 +494,28 @@ class CheckTests(unittest.TestCase):
         self.assertEqual(pilot.event_mode(mesh, "n", {"actif": True}, nonces(), script="'x'"), (True, "Mode événement déjà actif"))
         self.assertEqual(len(mesh.calls), 4)
 
+    def test_event_mode_stops_update_services(self):
+        # maj.ps1 voyage devant pilote.ps1 pour le mode événement seulement.
+        cmd = pilot.build_command({"op": "evenement", "actif": True}, "ab12", script=pilot.with_updates())
+        self.assertLess(len(cmd), 18_000)
+        envoye = pilot_script(cmd)
+        self.assertLess(envoye.index("function Stop-ServicesMaj"), envoye.index("function Enable-Evenement"))
+        self.assertNotIn("function Stop-ServicesMaj", pilot_script(pilot.build_command({"op": "etat"}, "ab12")))
+        maj = pilot.UPDATES_SCRIPT.read_text(encoding="utf-8")
+        for service in ("wuauserv", "UsoSvc", "InstallService"):
+            self.assertIn(service, maj)
+        # La garde recoupe les services et s'efface d'elle-même à la fin du mode.
+        self.assertIn("Unregister-ScheduledTask -TaskName 'PointeNoire-Evenement'", maj)
+        pilote = pilot.AGENT_SCRIPT.read_text(encoding="utf-8")
+        wu = pilote.split("'windows_update' {", 1)[1].split("'veille' {", 1)[0]
+        self.assertIn("Stop-ServicesMaj $Avant", wu)
+        retour = pilote.split("function Reset-Partie", 1)[1].split("'veille' {", 1)[0]
+        self.assertIn("Start-ServicesMaj $Avant", retour)
+        # Un mode posé avant cette version : la relance arrête les services.
+        self.assertIn("-not $etat.services", pilote.split("function Enable-Evenement", 1)[1])
+        controle = pilot.CONTROL_SCRIPT.read_text(encoding="utf-8") if hasattr(pilot, "CONTROL_SCRIPT") else (pilot.AGENT_SCRIPT.parent / "controle.ps1").read_text(encoding="utf-8")
+        self.assertIn("Test-ServicesMaj $Actif $avant", controle)
+
     def test_wallpaper_stops_when_the_survey_is_not_posed(self):
         mesh = FakeMesh({"releve": [{"ok": False, "detail": "accès refusé"}]})
         self.assertEqual(pilot.wallpaper(mesh, "n", "PN09", {"actif": True}, nonces(), script="'x'"), (False, "Relevé de l'écran pas posé : accès refusé"))

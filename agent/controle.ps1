@@ -204,6 +204,34 @@ function Test-WindowsUpdate([bool]$Actif, $Avant) {
     else { Add-Point 'Windows Update' $true 'rendu comme avant l''événement' }
 }
 
+# Services de mise à jour (wuauserv, UsoSvc, InstallService) : désactivés et
+# arrêtés pendant le mode, rendus après. Un état d'avant sans services : mode
+# posé par une version d'avant, rien à relire.
+function Test-ServicesMaj([bool]$Actif, $Avant) {
+    if (-not $Avant.services) {
+        if ($Actif) { Add-Point 'Services de mise à jour' $false 'pas arrêtés : relancer « Activer le mode événement »' }
+        return
+    }
+    $ko = @()
+    foreach ($p in @($Avant.services.PSObject.Properties)) {
+        $svc = Get-Service -Name $p.Name -ErrorAction SilentlyContinue
+        if (-not $svc) { continue }
+        $start = Get-Valeur "HKLM:\SYSTEM\CurrentControlSet\Services\$($p.Name)" 'Start'
+        if ($Actif) {
+            if ($start -ne 4 -or $svc.Status -eq 'Running') { $ko += "$($p.Name) ($($svc.Status))" }
+        } elseif (-not (Test-Egal $start $p.Value.start)) { $ko += $p.Name }
+    }
+    if ($Actif) {
+        $garde = Get-ScheduledTask -TaskName 'PointeNoire-Evenement' -ErrorAction SilentlyContinue
+        if (-not $garde) { $ko += 'tâche PointeNoire-Evenement absente' }
+        if ($ko.Count) { Add-Point 'Services de mise à jour' $false "encore actifs : $($ko -join ', ')" }
+        else { Add-Point 'Services de mise à jour' $true 'Windows Update et le Store arrêtés, recoupés toutes les 15 min' }
+        return
+    }
+    if ($ko.Count) { Add-Point 'Services de mise à jour' $false "pas rendus comme avant : $($ko -join ', ')" }
+    else { Add-Point 'Services de mise à jour' $true 'rendus comme avant l''événement' }
+}
+
 function Test-Veille([bool]$Actif, $Avant) {
     $ko = @()
     foreach ($r in $reglagesVeille) {
@@ -317,7 +345,7 @@ function Test-Evenement([bool]$Actif, $Demande) {
         # Une partie jamais activée pendant cet événement n'a rien à rendre.
         if (-not $Actif -and $clesAvant[$partie] -and $null -eq $avant.($clesAvant[$partie])) { continue }
         switch ($partie) {
-            'windows_update' { Test-WindowsUpdate $Actif $avant }
+            'windows_update' { Test-WindowsUpdate $Actif $avant; Test-ServicesMaj $Actif $avant }
             'veille' { Test-Veille $Actif $avant }
             'notifications' { Test-Notifications $Actif $avant }
             'conseils' { Test-Conseils $Actif $avant }
