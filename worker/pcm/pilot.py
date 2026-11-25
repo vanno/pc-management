@@ -52,6 +52,7 @@ PROBE_SCRIPT = Path(__file__).resolve().parents[2] / "agent" / "supervision.ps1"
 DIAGNOSTIC_SCRIPT = Path(__file__).resolve().parents[2] / "agent" / "diagnostic.ps1"
 # La stratégie de groupe locale de l'allègement, envoyée devant pilote.ps1.
 POLICY_SCRIPT = Path(__file__).resolve().parents[2] / "agent" / "politique.ps1"
+UPDATES_SCRIPT = Path(__file__).resolve().parents[2] / "agent" / "maj.ps1"
 WALLPAPER_SCRIPT = Path(__file__).resolve().parents[2] / "agent" / "fond.ps1"
 WALLPAPER_INSTALLER = Path(__file__).resolve().parents[2] / "agent" / "fond-pose.ps1"
 SURVEY_SCRIPT = Path(__file__).resolve().parents[2] / "agent" / "releve.ps1"
@@ -283,7 +284,7 @@ def event_mode(
             return False, "Paramètre `parties` invalide."
         body["parties"] = list(dict.fromkeys(parties))
     try:
-        reply = call(mesh, device_id, body, new_nonce, script=script)
+        reply = call(mesh, device_id, body, new_nonce, script=with_updates(script))
     except (MeshError, PilotError) as exc:
         return False, str(exc)
     detail = reply.get("detail") or ""
@@ -303,6 +304,15 @@ def with_policy(script: str | None = None) -> str:
     if script is None:
         script = AGENT_SCRIPT.read_text(encoding="utf-8")
     return POLICY_SCRIPT.read_text(encoding="utf-8") + "\n" + script
+
+
+def with_updates(script: str | None = None) -> str:
+    """pilote.ps1 précédé de maj.ps1 : les services de mise à jour arrêtés
+    pendant le mode événement (la pause ne retient ni le Store ni Defender,
+    et Windows Famille ignore les stratégies de Windows Update)."""
+    if script is None:
+        script = AGENT_SCRIPT.read_text(encoding="utf-8")
+    return UPDATES_SCRIPT.read_text(encoding="utf-8") + "\n" + script
 
 
 def cleanup(mesh: MeshCtrl, device_id: str, params: dict, new_nonce: Callable[[], str], script: str | None = None) -> tuple[bool, str] | tuple[bool, str, bool]:
@@ -752,6 +762,7 @@ def slim_fingerprints() -> dict[str, str]:
     sent["releve-pose.ps1+releve.ps1"] = with_wallpaper(SURVEY_INSTALLER.read_text(encoding="utf-8"), SURVEY_SCRIPT)
     sent["fond-pose.ps1+fond.ps1"] = with_wallpaper(WALLPAPER_INSTALLER.read_text(encoding="utf-8"), WALLPAPER_SCRIPT)
     sent["politique.ps1+pilote.ps1"] = with_policy()
+    sent["maj.ps1+pilote.ps1"] = with_updates()
     sent["reseau-pose.ps1+reseau.ps1"] = with_source(WATCH_INSTALLER.read_text(encoding="utf-8"), WATCH_SCRIPT, "VeilleSource")
     return {name: hashlib.sha256(slim(text).encode("utf-8")).hexdigest()[:12] for name, text in sent.items()}
 
